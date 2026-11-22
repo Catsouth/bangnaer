@@ -1,1 +1,90 @@
-#
+name: Build unsigned IPA
+
+# 绑哪儿 iOS 壳：产出未签名 IPA，签名由用户自己用证书在 ESign/轻松签里完成。
+# 本地是 Linux 没有 Xcode，所以编译借 GitHub Actions 的 macOS runner。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios-app/**"
+      - "src/icon.svg"
+      - "scripts/gen-icons.py"
+      - ".github/workflows/build-ipa.yml"
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 注意：dist/ 在 .gitignore 里、没有进 git，CI 里现组装一份。
+      # 与 build.sh 的区别只有图标：GitHub 快照里不放二进制（推送通道只收
+      # UTF-8 文本），所以组装只拷文本文件，图标由下一步从 icon.svg 现生成；
+      # 其余与 build.sh 完全一致（src 原样拷贝 + 版本号替换），最终仍是 8 文件。
+      - name: Assemble web assets (text files only; icons are generated next)
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          FILES="index.html manifest.webmanifest icon.svg"
+          rm -rf dist && mkdir -p dist
+          for f in $FILES; do cp "src/$f" "dist/$f"; done
+          sed -i '' "s/__VERSION__/v$VERSION/g" dist/index.html
+          if grep -q "__VERSION__" dist/index.html; then echo "version placeholder left"; exit 1; fi
+          ls -la dist
+
+      # 图标全套从 src/icon.svg 现生成（scripts/gen-icons.py）：
+      # 网页图标进 dist（补齐 8 文件），AppIcon 1024 直接生成到 xcassets——
+      # 仓库里那张 icon-1024.png 在 GitHub 快照中会被排除，必须 CI 自己生成。
+      - name: Generate icons from SVG (web icons + AppIcon)
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/iconvenv
+          /tmp/iconvenv/bin/pip install pillow cairosvg
+          /tmp/iconvenv/bin/python scripts/gen-icons.py --out dist \
+            --appicon ios-app/BindAtlas/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          ls -la dist
+          ls -la ios-app/BindAtlas/Assets.xcassets/AppIcon.appiconset
+
+      - name: Copy web assets into app bundle resources
+        run: |
+          set -euo pipefail
+          FILES="index.html manifest.webmanifest icon.svg icon-192.png icon-512.png apple-touch-icon.png favicon.png favicon.ico"
+          for f in $FILES; do cp "dist/$f" "ios-app/BindAtlas/Web/$f"; done
+          ls -la ios-app/BindAtlas/Web
+
+      - name: Build app (unsigned)
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BindAtlas.xcodeproj \
+            -scheme BindAtlas \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find ios-app/build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          echo "App: $APP_PATH"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/Web/index.html"
+          rm -rf Payload bangnaer-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry bangnaer-unsigned.ipa Payload
+          ls -la bangnaer-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bangnaer-unsigned-ipa
+          path: bangnaer-unsigned.ipa
+          if-no-files-found: error
