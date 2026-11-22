@@ -1,0 +1,172 @@
+# 绑哪儿 iOS 构建 workflow —— 改造自 Ckxkx/account-atlas 的 .github/workflows/ios.yml
+# （上游代码 GPL-3.0，本文件随绑哪儿以 GPL-3.0 发布；上游：https://github.com/Ckxkx/account-atlas ）
+#
+# 由用户在 GitHub 网页端把本文件内容上传到 .github/workflows/ios.yml 后生效
+# （我方推送通道写不了 .github/workflows/ 目录）。上传后可删除仓库里旧的 build-ipa.yml，
+# 避免两条管线同时触发。
+#
+# 与上游的差异：
+# 1. 源码/资源路径整体加 native-app/ 前缀（上游在仓库根目录：native/、icons/、ios/）。
+# 2. App 名 / 可执行名 Atlas → BindAtlas；产物 Atlas.ipa → bangnaer-unsigned.ipa；
+#    artifact 名 Atlas-ipa → bangnaer-ipa。
+# 3. Bundle ID dev.huichen.atlas → xyz.465871.bind（在 native-app/native/Info.plist
+#    模板与下方截图 job 中），与现有壳 App 一致，保证覆盖安装、数据不丢。
+# 4. 显示名改为「绑哪儿」（在 Info.plist 模板内，不在本文件）。
+# 5. 去掉上游 $APP/www 的 mkdir/rmdir（壳时代残留，原生构建不用）。
+# 6. 图标资产指向 native-app/ios/Assets.xcassets，AppIcon 为绑哪儿自有图标
+#    （由 scripts/gen-icons.py 从 src/icon.svg 生成），非上游品牌资产。
+# 7. 服务图标 PNG 不入库（我方 GitHub 快照通道只收 UTF-8 文本，二进制会被整单
+#    拒绝）：构建时现场生成——优先用 native-app/tools/lige-icons.py 从用户自己的
+#    Lige 图标包（Catsouth/lige_icon）按预设域名映射下载，缺的再回退上游
+#    appicons.py（iTunes 抓图，只补缺失的那批）。上游原本假设 icons/ 已提交入库，
+#    此处改掉该假设；两处 cp -R native-app/icons 的组装步骤不变。
+# 8. AppIcon 的 icon-1024.png 同样不入库：CI 用 scripts/gen-icons.py 从
+#    src/icon.svg 现生成（与仓库既有 build-ipa.yml 做法一致）；入库的只有
+#    AppIcon.appiconset 的 Contents.json。
+# 9. 本文件的 YAML 缩进已规范化为 2 空格（备稿初版缩进丢失、解析不过，已修复；
+#    逻辑与上游一致）。
+#
+# 保留的上游结构：swiftc 直编 + 手工组装 .app、Info.plist 放 zip 第一位、
+# 模拟器截图 job、构建号 = git 提交数 + 1000、启动参数 -atlasTab / -atlasRoute /
+# -atlas.theme（源码 AtlasApp.swift 内定义的内部参数名，未改）。
+
+name: Build iOS IPA
+# Push to main: build only, the IPA is kept as an Actions artifact (no release, no branch).
+# Releases are made by release.yml, which calls this workflow with a version (2.1, 2.2,...).
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['native-app/**', '.github/workflows/ios.yml', 'src/icon.svg', 'scripts/gen-icons.py']
+  push:
+    branches: [main, dev]
+    paths: ['native-app/**', '.github/workflows/ios.yml', 'src/icon.svg', 'scripts/gen-icons.py']
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+
+concurrency:
+  group: ios-${{ inputs.version || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate service icons (Lige pack first, appicons.py fallback)
+        run: |
+          set -euo pipefail
+          mkdir -p native-app/icons build
+          python3 native-app/tools/lige-icons.py --out native-app/icons --missing-json build/lige-missing.json
+          if [ "$(cat build/lige-missing.json)" != "[]" ]; then
+            rm -rf build/appicons-fallback && mkdir -p build/appicons-fallback/tools build/appicons-fallback/icons
+            cp native-app/tools/appicons.py build/appicons-fallback/tools/
+            cp build/lige-missing.json build/appicons-fallback/tools/appicons.json
+            (cd build/appicons-fallback && python3 tools/appicons.py)
+            cp build/appicons-fallback/icons/*.png native-app/icons/ 2>/dev/null || true
+          fi
+          echo "service icons: $(ls native-app/icons | wc -l)"
+      - name: Generate AppIcon from src/icon.svg
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/iconvenv
+          /tmp/iconvenv/bin/pip install pillow cairosvg
+          /tmp/iconvenv/bin/python scripts/gen-icons.py --out /tmp/bangnaer-webicons --appicon native-app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          ls -la native-app/ios/Assets.xcassets/AppIcon.appiconset
+      - name: Build unsigned IPA
+        env:
+          VERSION: ${{ inputs.version || '0.0' }}
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          APP=build/Payload/BindAtlas.app
+          mkdir -p "$APP" build
+          xcrun -sdk iphoneos swiftc -parse-as-library -O -swift-version 5 -target arm64-apple-ios17.0 -sdk "$SDK" native-app/native/*.swift -o "$APP/BindAtlas" 2>&1 | tee build/swiftc.log
+          test -f "$APP/BindAtlas"
+          cp -R native-app/icons "$APP/icons"; cp -R native-app/native/lproj/*.lproj "$APP/"; for f in "$APP"/*.lproj/InfoPlist.strings; do plutil -convert binary1 "$f"; done
+          BUILD=$(( $(git rev-list --count HEAD) + 1000 )) # same build number as the Android versionCode
+          sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" native-app/native/Info.plist > "$APP/Info.plist"
+          xcrun actool native-app/ios/Assets.xcassets --compile "$APP" --platform iphoneos --minimum-deployment-target 17.0 \
+            --app-icon AppIcon --output-partial-info-plist build/partial.plist --target-device iphone
+          /usr/libexec/PlistBuddy -c "Merge build/partial.plist" "$APP/Info.plist"
+          for k in DTPlatformName:iphoneos DTSDKName:iphoneos$(xcrun --sdk iphoneos --show-sdk-version); do
+            /usr/libexec/PlistBuddy -c "Add:${k%%:*} string ${k#*:}" "$APP/Info.plist"; done
+          plutil -convert binary1 "$APP/Info.plist"
+          echo -n 'APPL????' > "$APP/PkgInfo"
+          cd build && zip -qX -D../bangnaer-unsigned.ipa "Payload/BindAtlas.app/Info.plist" && zip -qrXy../bangnaer-unsigned.ipa Payload -x "Payload/BindAtlas.app/Info.plist" && cd .. # Info.plist first: sign tools that scan local headers (全能签 etc.) find it even on a partial download
+          test "$(unzip -Z1 bangnaer-unsigned.ipa | head -1)" = "Payload/BindAtlas.app/Info.plist"
+          ls -la bangnaer-unsigned.ipa; file "$APP/BindAtlas"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bangnaer-ipa
+          path: bangnaer-unsigned.ipa
+
+  # simulator screenshots: only when run by hand (Actions -> Run workflow)
+  preview:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.version }}
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate service icons (Lige pack first, appicons.py fallback)
+        run: |
+          set -euo pipefail
+          mkdir -p native-app/icons build
+          python3 native-app/tools/lige-icons.py --out native-app/icons --missing-json build/lige-missing.json
+          if [ "$(cat build/lige-missing.json)" != "[]" ]; then
+            rm -rf build/appicons-fallback && mkdir -p build/appicons-fallback/tools build/appicons-fallback/icons
+            cp native-app/tools/appicons.py build/appicons-fallback/tools/
+            cp build/lige-missing.json build/appicons-fallback/tools/appicons.json
+            (cd build/appicons-fallback && python3 tools/appicons.py)
+            cp build/appicons-fallback/icons/*.png native-app/icons/ 2>/dev/null || true
+          fi
+          echo "service icons: $(ls native-app/icons | wc -l)"
+      - name: Generate AppIcon from src/icon.svg
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/iconvenv
+          /tmp/iconvenv/bin/pip install pillow cairosvg
+          /tmp/iconvenv/bin/python scripts/gen-icons.py --out /tmp/bangnaer-webicons --appicon native-app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          ls -la native-app/ios/Assets.xcassets/AppIcon.appiconset
+      - name: Build for simulator and take screenshots
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          APP=sim/BindAtlas.app
+          mkdir -p "$APP" shots
+          xcrun -sdk iphonesimulator swiftc -parse-as-library -Onone -swift-version 5 -target arm64-apple-ios17.0-simulator -sdk "$SDK" native-app/native/*.swift -o "$APP/BindAtlas"
+          cp -R native-app/icons "$APP/icons"; cp -R native-app/native/lproj/*.lproj "$APP/"
+          sed -e "s/__VERSION__/2.0/" -e "s/__BUILD__/1/" native-app/native/Info.plist > "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete:CFBundleSupportedPlatforms" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add:CFBundleSupportedPlatforms array" -c "Add:CFBundleSupportedPlatforms:0 string iPhoneSimulator" "$APP/Info.plist"
+          xcrun actool native-app/ios/Assets.xcassets --compile "$APP" --platform iphonesimulator --minimum-deployment-target 17.0 \
+            --app-icon AppIcon --output-partial-info-plist sim/partial.plist --target-device iphone
+          /usr/libexec/PlistBuddy -c "Merge sim/partial.plist" "$APP/Info.plist"
+          codesign -s - --force "$APP"
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone 16 Pro') or x['name'].startswith('iPhone 17 Pro')];c=c or [x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];print(c[-1]['udid'])")
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl status_bar "$UDID" override --time 9:41 --batteryLevel 100 --cellularBars 4 || true
+          xcrun simctl install "$UDID" "$APP"
+          shot() { xcrun simctl terminate "$UDID" xyz.465871.bind || true; xcrun simctl launch "$UDID" xyz.465871.bind "${@:2}"; sleep 7; xcrun simctl io "$UDID" screenshot "shots/$1.png"; }
+          shot 1-wallet
+          shot 2-wallet-light -atlas.theme light
+          shot 3-sites -atlasTab 1
+          shot 4-map -atlasTab 2
+          shot 5-identity -atlasRoute identity
+          shot 6-picker -atlasRoute picker
+          shot 7-settings -atlasRoute settings
+          shot 8-new -atlasRoute new
+          ls shots
+      - name: Keep screenshots as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-shots
+          path: shots/
+          retention-days: 14
