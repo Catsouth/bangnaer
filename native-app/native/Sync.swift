@@ -123,6 +123,10 @@ final class Sync: ObservableObject {
     var out = AtlasData()
     out.identities = pick(a.identities, b.identities) { $0.updatedAt ?? 0 }
     out.accounts = pick(a.accounts, b.accounts) { $0.updatedAt ?? 0 }
+    // recycle bin: union by entry id (local entries first). Trash is a local recovery
+    // aid, not part of the per-item merge; carrying it along keeps adopt() from wiping it.
+    var seenTrash = Set<String>()
+    out.trash = (a.trash + b.trash).filter { seenTrash.insert($0.id).inserted }
     for id in del.keys where out.identities.contains(where: { $0.id == id }) || out.accounts.contains(where: { $0.id == id }) { del[id] = nil }
     out.identities = out.identities.enumerated().sorted { ($0.element.order ?? 1e9, Double($0.offset)) < ($1.element.order ?? 1e9, Double($1.offset)) }.map(\.element)
     let ids = Set(out.identities.map(\.id))

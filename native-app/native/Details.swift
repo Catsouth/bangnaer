@@ -49,16 +49,11 @@ struct IdentityDetail: View {
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
         .confirmationDialog("删除 \(store.title(i))？", isPresented: $askDelete, titleVisibility: .visible) {
           Button("删除", role: .destructive) {
-            store.mutate("已删除") { s in
-              s.identities.removeAll { $0.id == i.id }
-              for k in s.accounts.indices { s.accounts[k].identityIds.removeAll { $0 == i.id } }
-              // login cards bound to it just lose the binding
-              for k in s.identities.indices where s.identities[k].via == i.id { s.identities[k].via = nil }
-            }
+            store.deleteIdentityToTrash(i)
             store.setKind(store.kind)
             dismiss()
           }
-        } message: { Text(accs.isEmpty ? "删除后可以撤销。" : "它会从 \(accs.count) 个网站与 App 的记录里移除，这些网站本身会保留。") }
+        } message: { Text(accs.isEmpty ? "删除后会移到回收站，可以在设置里恢复。" : "它会从 \(accs.count) 个网站与 App 的记录里移除，这些网站本身会保留。删除后会移到回收站，可以恢复。") }
       }
     }
   }
@@ -193,8 +188,8 @@ struct AccountDetail: View {
         .background(alignment: .top) { b.frame(height: 360).blur(radius: 90).opacity(0.45).ignoresSafeArea() }
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
         .confirmationDialog("删除 \(a.name)？", isPresented: $askDelete, titleVisibility: .visible) {
-          Button("删除", role: .destructive) { store.mutate("已删除") { s in s.accounts.removeAll { $0.id == a.id } }; dismiss() }
-        } message: { Text("只删除这条记录，不影响你在那个网站上的账号。") }
+          Button("删除", role: .destructive) { store.deleteAccountToTrash(a); dismiss() }
+        } message: { Text("只删除这条记录，不影响你在那个网站上的账号。删除后会移到回收站，可以恢复。") }
       }
     }
   }

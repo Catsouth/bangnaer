@@ -24,6 +24,11 @@ MapView.swift、Model.swift、Presets.swift、Settings.swift、SitesView.swift�
 Sync.swift、WalletView.swift，外加 Info.plist 与 lproj/ 本地化目录
 （Base / en / zh-Hans 三套，各含 InfoPlist.strings）。
 
+绑哪儿自研新增（不在上游内，swiftc 通配 `native/*.swift` 自动纳入构建，
+无需改工程文件）：WebDAV.swift（WebDAV 备份 + Keychain 封装）、Trash.swift
+（回收站）、Lock.swift（PIN 屏幕锁），2026-11-23 第一批功能移植时加入；
+三套 lproj 各补 Localizable.strings（新功能主要文案）。
+
 一并引入：
 - `icons/` → `native-app/icons/`（实测 112 个第三方服务图标，按域名命名，
   识别用途；权利归各服务商，与上游同样的使用方式，不声称为我方资产）
@@ -143,7 +148,7 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
 
 ## 文本推送清单（native-app/，最终版）
 
-我方 GitHub 快照推送通道只接受 UTF-8 文本文件，以下 24 条为 native-app/
+我方 GitHub 快照推送通道只接受 UTF-8 文本文件，以下 30 条为 native-app/
 下应推送的全部文本路径（父代理照单推送；LICENSE 与 NOTICE.md 在仓库
 根目录、属仓库级文件，不在本清单内）：
 
@@ -171,6 +176,12 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
 22. `native-app/tools/appicons.py`
 23. `native-app/tools/convert-our-export.py`
 24. `native-app/tools/lige-icons.py`
+25. `native-app/native/Lock.swift`（第一批移植新增：PIN 屏幕锁）
+26. `native-app/native/Trash.swift`（第一批移植新增：回收站）
+27. `native-app/native/WebDAV.swift`（第一批移植新增：WebDAV 备份）
+28. `native-app/native/lproj/Base.lproj/Localizable.strings`
+29. `native-app/native/lproj/en.lproj/Localizable.strings`
+30. `native-app/native/lproj/zh-Hans.lproj/Localizable.strings`
 
 明确排除（勿推）：`native-app/icons/*.png`（112 个，CI 生成）、
 `native-app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png`（CI 生成）、
@@ -205,17 +216,71 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
 - 自测（仿网页版 buildDemoDB 样本 + 1 条 trash）：身份 4→4、服务 11→11、
   绑定 11→11、墓碑 1，字段级断言 9 项全过；文件模式端到端亦通过。
 
-## 后续阶段清单（待移植/待建功能）
+## 功能移植进度
+
+用户已拍板十项功能全加（2026-11-23），分批移植。行为基准为网页版
+`src/index.html` 的对应实现，数据模型基准为上游 `native/Model.swift`。
+
+### 第一批（已实现，2026-11-23，本地提交未推送）
+
+1. **WebDAV 备份**（新增 `native-app/native/WebDAV.swift`）
+   - 与上游加密 Gist 同步**并存**：Gist 是逐条合并 + 端到端加密；WebDAV 是
+     整份明文备份/整表恢复，UI 文案已写清区别。`Store.onSaved` 同时挂两边调度。
+   - 配置：服务器地址/用户名/文件路径存 UserDefaults，**密码只进 Keychain**
+     （Security 框架小封装，同文件内）；设置页有「填入 465871.xyz 预设」
+     （地址 https://dav.465871.xyz/dav + 路径 account-atlas/atlas.json，
+     用户名密码仍手填）。
+   - 策略与网页版一致：零轮询；变更后 2 秒防抖 + 内容哈希（sortedKeys 编码的
+     SHA256）比对，没变不传；拉取只在手动「从云端恢复」。恢复前先把本机数据
+     写一份 `atlas-before-restore.json` 快照再整表替换（Store.adopt）。
+   - PUT 遇 404/409 先 MKCOL 父目录再重试一次；PROPFIND 测试连接如实报状态码；
+     401/403/404/405 都有人话提示。失败只记状态行，不阻塞、不丢本地数据。
+   - 示例数据（demo）不备份，与网页版护栏一致。
+2. **回收站**（新增 `native-app/native/Trash.swift`；`Model.swift` 的
+   AtlasData 加 `trash` 字段，旧数据缺省为空、解码兼容）
+   - 条目两种形状对齐网页版：account = 单条服务快照；identity = 身份快照 +
+     其引用到的服务快照（links）+ via 指向它的登录卡 id（viaFrom）。
+   - 删除路径收口：详情页删账号/删身份都走 `deleteAccountToTrash` /
+     `deleteIdentityToTrash`（身份删除保持上游语义：账号保留、只解绑）；
+     删除仍写墓碑（stamp 机制不变，同步合并语义保持）；`Sync.merge` 对
+     trash 按条目 id 做并集，避免 adopt 时被冲掉。
+   - **取舍：删除不再提供撤销 toast**——回收站是唯一恢复通道，避免与撤销的
+     整表快照回滚双轨冲突（网页版同理）。其他编辑类操作仍保留撤销。
+   - 界面：设置页入口（带计数）→ 列表（名称/类型/删除时间），支持恢复
+     （id 冲突跳过并计数提示；恢复身份时重新挂回 links 的绑定与 via）、
+     彻底删除（只删条目、墓碑保留）、一键清空（带确认）。清空全部数据
+     时回收站一并清空。
+3. **PIN 屏幕锁**（新增 `native-app/native/Lock.swift`；Info.plist 模板补
+   NSFaceIDUsageDescription「用于解锁绑哪儿」）
+   - PIN 4–6 位，只存**加盐 SHA256**（随机 16 字节盐）+ 位数，存
+     UserDefaults；设置/修改/关闭都在设置页「屏幕锁」，关闭与修改须先验
+     当前 PIN。
+   - 锁定时机：冷启动即锁（AppLock 初始化，锁屏盖在展示层之上，锁定时
+     还会关掉已打开的 route/sheet）；切后台超过 60 秒返回时再锁。
+   - 数字键盘 UI：圆点指示、输满位数自动校验、输错震动 + 摇晃动画；
+     连续错 5 次冷却 30 秒（截止时间落盘，重启不能绕）。
+   - 可选面容 ID：开启 PIN 后可在设置里开「面容 ID 解锁」（LocalAuthentication，
+     锁屏出现时自动尝试一次 + 键盘区有按钮重试），失败回落 PIN。
+
+### 后续批次（待做）
+
+- 第二批：自动识别导入（Vaultwarden/Bitwarden 导出、浏览器密码 CSV、粘贴
+  文本、剪贴板）；身份卡扩类型（QQ / Google / 自定义）。
+- 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；
+  服务状态标记与筛选；换绑清单；账号体检。
+- 数据转换器反向（atlas 原生 → 网页版格式，如需双向迁移再补）。
+
+## 后续阶段清单（待移植/待建功能，旧）
 
 1. 球形星系关系图（v1.10.6 在壳原型里验证中的球形视图，移植为原生视图；
-   上游原生关系图是双列连线图，不满足我们的星系形态）
-2. WebDAV 备份（网页版已有实现与服务端通道，原生端新写；上游只有加密 Gist 同步）
+   上游原生关系图是双列连线图，不满足我们的星系形态）→ 已排入第三批
+2. WebDAV 备份 → **已完成（第一批）**
 3. 自动识别导入（Vaultwarden/Bitwarden 导出、浏览器密码 CSV、粘贴文本识别——
-   网页版已有，原生端移植）
-4. 回收站（上游只有墓碑 + 单步撤销；网页版有完整回收站，需在原生端新做，
-   数据层可借墓碑 + 快照扩展）
-5. PIN 屏幕锁（网页版已有，原生端用本地校验 + 可选生物识别）
+   网页版已有，原生端移植）→ 已排入第二批
+4. 回收站 → **已完成（第一批）**
+5. PIN 屏幕锁 → **已完成（第一批）**
 6. 换绑清单、账号体检、服务状态（绑哪儿独有功能，原生端按网页版逻辑移植）
+   → 已排入第三批
 7. 数据转换器反向（atlas 原生 → 网页版格式，如需双向迁移再补）
 
 ## 安全确认与阻塞（已解决）

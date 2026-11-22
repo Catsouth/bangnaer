@@ -12,6 +12,8 @@ struct BackupDoc: FileDocument {
 struct SettingsSheet: View {
   @Environment(Store.self) var store
   @EnvironmentObject var sync: Sync
+  @EnvironmentObject var dav: WebDAV
+  @Environment(AppLock.self) var lock
   @Environment(\.dismiss) var dismiss
   @State private var exporting = false
   @State private var importing = false
@@ -29,7 +31,14 @@ struct SettingsSheet: View {
               Text(syncStatus).foregroundStyle(.secondary).font(.system(size: 14))
             }
           }
-        }
+          NavigationLink { WebDAVView() } label: {
+            HStack {
+              Label("WebDAV 备份", systemImage: "externaldrive.badge.icloud")
+              Spacer()
+              Text(dav.summary).foregroundStyle(.secondary).font(.system(size: 14))
+            }
+          }
+        } footer: { Text("加密同步是多设备逐条合并；WebDAV 是整份明文备份。两者可以同时开。") }
         Section {
           Toggle(isOn: Binding(get: { store.privacy }, set: { v in store.privacy = v }).animation(Motion.smooth)) { Label("隐藏号码", systemImage: "eye.slash") }
           Picker(selection: Binding(get: { store.theme }, set: { ThemeFX.set($0, store: store) })) {
@@ -40,8 +49,26 @@ struct SettingsSheet: View {
           NavigationLink { OrderView() } label: { Label("调整卡片顺序", systemImage: "arrow.up.arrow.down") }
         }
         Section {
+          NavigationLink { LockSettingsView() } label: {
+            HStack {
+              Label("屏幕锁", systemImage: "lock")
+              Spacer()
+              Text(lock.enabled ? "已开启" : "未开启").foregroundStyle(.secondary).font(.system(size: 14))
+            }
+          }
+        }
+        Section {
           Button { doc = BackupDoc(data: store.backupJSON()); exporting = true } label: { Label("导出备份", systemImage: "square.and.arrow.up") }
           Button { importing = true } label: { Label("导入备份", systemImage: "square.and.arrow.down") }
+          NavigationLink { TrashView() } label: {
+            HStack {
+              Label("回收站", systemImage: "trash")
+              Spacer()
+              if !store.data.trash.isEmpty {
+                Text("\(store.data.trash.count) 项").foregroundStyle(.secondary).font(.system(size: 14))
+              }
+            }
+          }
           if !sync.on {
             Button { store.mutate("已载入示例") { s in s = Store.demo() }; store.data.demo = true; store.persist(); store.setKind("email") } label: { Label("载入示例", systemImage: "text.badge.plus") }
           }
@@ -61,7 +88,7 @@ struct SettingsSheet: View {
         Section {
           VStack(spacing: 6) {
             Text("绑哪儿").font(.system(size: 15, weight: .semibold))
-            Text("不保存任何密码 · 数据只在本机和你自己的私有 Gist").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("不保存任何密码 · 数据只在本机、你自己的 WebDAV 和私有 Gist").font(.system(size: 12)).foregroundStyle(.secondary)
           }.frame(maxWidth: .infinity)
         }.listRowBackground(Color.clear)
       }
@@ -71,14 +98,14 @@ struct SettingsSheet: View {
       .fileExporter(isPresented: $exporting, document: doc, contentType: .json, defaultFilename: "账号备份-\(Date().formatted(.iso8601.year().month().day()))") { r in
         if case .success = r { store.show("备份已导出") }
       }
-      .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { r in
+      .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data, .plainText]) { r in
         guard case .success(let url) = r else { return }
         let ok = url.startAccessingSecurityScopedResource(); defer { if ok { url.stopAccessingSecurityScopedResource() } }
         if let d = try? Data(contentsOf: url), store.importBackup(d) { dismiss() } else { store.show("这不是绑哪儿的备份文件") }
       }
       .confirmationDialog("清空全部数据？", isPresented: $askWipe, titleVisibility: .visible) {
         Button("清空全部数据", role: .destructive) {
-          store.mutate("已清空") { s in s.identities = []; s.accounts = [] }
+          store.mutate("已清空") { s in s.identities = []; s.accounts = []; s.trash = [] }
           store.setKind(store.kind); dismiss()
         }
       } message: { Text(sync.on ? "所有邮箱、手机号和网站记录都会删除，开了同步的其他设备也会一起清空。建议先导出备份。" : "所有邮箱、手机号和网站记录都会从这台设备上删除。建议先导出备份。") }

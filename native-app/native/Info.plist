@@ -24,5 +24,6 @@
   <key>UIViewControllerBasedStatusBarAppearance</key><true/>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
+  <key>NSFaceIDUsageDescription</key><string>用于解锁绑哪儿</string>
 </dict>
 </plist>

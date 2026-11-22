@@ -1,0 +1,14 @@
+/* New 绑哪儿 features (WebDAV backup / Trash / Screen lock): main strings.
+   SwiftUI Text looks up the Chinese literal as key; Base and zh-Hans map to themselves. */
+"WebDAV 备份" = "WebDAV Backup";
+"回收站" = "Trash";
+"屏幕锁" = "Screen Lock";
+"立即备份" = "Back Up Now";
+"从云端恢复" = "Restore from Cloud";
+"测试连接" = "Test Connection";
+"恢复" = "Restore";
+"彻底删除" = "Delete Permanently";
+"清空回收站" = "Empty Trash";
+"设置 PIN" = "Set PIN";
+"修改 PIN" = "Change PIN";
+"关闭 PIN" = "Turn Off PIN";

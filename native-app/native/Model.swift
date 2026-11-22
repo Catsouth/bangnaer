@@ -188,8 +188,12 @@ struct AtlasData: Codable {
   var accounts: [Account] = []
   var deleted: [String: Double] = [:]
   var demo: Bool? = nil
-  init(identities: [Identity] = [], accounts: [Account] = [], deleted: [String: Double] = [:], demo: Bool? = nil) {
-    self.identities = identities; self.accounts = accounts; self.deleted = deleted; self.demo = demo
+  /// recycle bin (绑哪儿 feature, not in upstream v2.2): deleted objects rest here as snapshots
+  /// until restored or purged. Missing in old data / other clients' files -> empty; unknown to
+  /// older clients it is just an extra key they keep via their own forward-compat handling.
+  var trash: [TrashEntry] = []
+  init(identities: [Identity] = [], accounts: [Account] = [], deleted: [String: Double] = [:], demo: Bool? = nil, trash: [TrashEntry] = []) {
+    self.identities = identities; self.accounts = accounts; self.deleted = deleted; self.demo = demo; self.trash = trash
   }
   init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
@@ -197,6 +201,7 @@ struct AtlasData: Codable {
     accounts = (try? c.decode([Account].self, forKey: .accounts)) ?? []
     deleted = (try? c.decode([String: Double].self, forKey: .deleted)) ?? [:]
     demo = try? c.decode(Bool.self, forKey: .demo)
+    trash = (try? c.decode([TrashEntry].self, forKey: .trash)) ?? []
   }
 }
 

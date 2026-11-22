@@ -4,27 +4,53 @@ import SwiftUI
 struct AtlasApp: App {
   @State private var store = Store()
   @StateObject private var sync = Sync()
+  @StateObject private var dav = WebDAV()
+  @State private var lock = AppLock()
   @Environment(\.scenePhase) private var phase
 
   var body: some Scene {
     WindowGroup {
-      RootView()
-        .environment(store)
-        .environmentObject(sync)
-        .onAppear {
-          ThemeFX.apply(store.theme)
-          sync.store = store
-          let s = sync
-          store.onSaved = { [weak s] in s?.schedule() }
-          if store.data.demo == true && UserDefaults.standard.string(forKey: "atlasDemo") == nil {
-            store.show("这是示例数据", action: "清空") {
-              store.mutate(nil) { s in s.identities = []; s.accounts = [] }
-              store.setKind(store.kind)
+      ZStack {
+        RootView()
+          .environment(store)
+          .environmentObject(sync)
+          .environmentObject(dav)
+          .environment(lock)
+          .onAppear {
+            ThemeFX.apply(store.theme)
+            sync.store = store
+            dav.store = store
+            let s = sync
+            let d = dav
+            store.onSaved = { [weak s, weak d] in s?.schedule(); d?.schedule() }
+            if store.data.demo == true && UserDefaults.standard.string(forKey: "atlasDemo") == nil {
+              store.show("这是示例数据", action: "清空") {
+                store.mutate(nil) { s in s.identities = []; s.accounts = [] }
+                store.setKind(store.kind)
+              }
             }
+            Task { await sync.run() }
           }
-          Task { await sync.run() }
+        // screen lock covers everything (incl. sheets: locking also drops any open route)
+        if lock.locked {
+          LockView()
+            .environment(lock)
+            .transition(.opacity)
+            .zIndex(1)
         }
-        .onChange(of: phase) { _, p in if p == .active { Task { await sync.run() } } }
+      }
+      .onChange(of: phase) { _, p in
+        switch p {
+        case .background:
+          lock.noteBackground()
+        case .active:
+          lock.noteForeground()
+          if lock.locked { store.route = nil }
+          Task { await sync.run() }
+        default:
+          break
+        }
+      }
     }
   }
 }
