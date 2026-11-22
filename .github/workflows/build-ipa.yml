@@ -105,8 +105,8 @@ jobs:
           NOTES="绑哪儿 v$VERSION 未签名 IPA：下载 bangnaer-unsigned.ipa 后，用你自己的证书签名安装。壳 App 与 Safari 数据隔离，首次打开请在「设置 → WebDAV」拉一次备份恢复数据。"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" bangnaer-unsigned.ipa --clobber
-            gh release edit "$TAG" --title "绑哪儿 $TAG（未签名 IPA）" --notes "$NOTES" --latest
+            gh release edit "$TAG" --title "绑哪儿 ${TAG}（未签名 IPA）" --notes "$NOTES" --latest
           else
-            gh release create "$TAG" bangnaer-unsigned.ipa --title "绑哪儿 $TAG（未签名 IPA）" --notes "$NOTES" --latest
+            gh release create "$TAG" bangnaer-unsigned.ipa --title "绑哪儿 ${TAG}（未签名 IPA）" --notes "$NOTES" --latest
           fi
           gh release view "$TAG"
