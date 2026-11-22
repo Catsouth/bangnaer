@@ -101,7 +101,7 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add:${k%%:*} string ${k#*:}" "$APP/Info.plist"; done
           plutil -convert binary1 "$APP/Info.plist"
           echo -n 'APPL????' > "$APP/PkgInfo"
-          cd build && zip -qX -D../bangnaer-unsigned.ipa "Payload/BindAtlas.app/Info.plist" && zip -qrXy../bangnaer-unsigned.ipa Payload -x "Payload/BindAtlas.app/Info.plist" && cd .. # Info.plist first: sign tools that scan local headers (全能签 etc.) find it even on a partial download
+          cd build && zip -qX -D ../bangnaer-unsigned.ipa "Payload/BindAtlas.app/Info.plist" && zip -qrXy ../bangnaer-unsigned.ipa Payload -x "Payload/BindAtlas.app/Info.plist" && cd .. # Info.plist first: sign tools that scan local headers (全能签 etc.) find it even on a partial download
           test "$(unzip -Z1 bangnaer-unsigned.ipa | head -1)" = "Payload/BindAtlas.app/Info.plist"
           ls -la bangnaer-unsigned.ipa; file "$APP/BindAtlas"
       - uses: actions/upload-artifact@v4
