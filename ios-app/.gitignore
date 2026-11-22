@@ -1,0 +1,8 @@
+# Web/ 里的网页文件是 CI 构建时从 dist/ 拷进来的，不进 git（.gitkeep 除外）
+BindAtlas/Web/*
+!BindAtlas/Web/.gitkeep
+
+# Xcode 构建产物
+build/
+*.xcuserstate
+xcuserdata/

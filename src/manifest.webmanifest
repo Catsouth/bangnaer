@@ -1,0 +1,35 @@
+{
+ "background_color": "#070a1a",
+ "display": "standalone",
+ "icons": [
+  {
+   "purpose": "any",
+   "sizes": "192x192",
+   "src": "icon-192.png",
+   "type": "image/png"
+  },
+  {
+   "purpose": "any",
+   "sizes": "512x512",
+   "src": "icon-512.png",
+   "type": "image/png"
+  },
+  {
+   "purpose": "maskable",
+   "sizes": "512x512",
+   "src": "icon-512.png",
+   "type": "image/png"
+  },
+  {
+   "sizes": "180x180",
+   "src": "apple-touch-icon.png",
+   "type": "image/png"
+  }
+ ],
+ "name": "绑哪儿",
+ "short_name": "绑哪儿",
+ "start_url": ".",
+ "theme_color": "#131a42",
+ "description": "记清每个邮箱、手机号、微信/QQ 号注册绑了哪些网站和 App：自动识别导入，数据只存自己设备和自己的 WebDAV。",
+ "lang": "zh-CN"
+}

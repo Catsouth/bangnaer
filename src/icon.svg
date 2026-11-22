@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="账号星图 Atlas 图标">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2a78"/>
+      <stop offset=".48" stop-color="#4a54c9"/>
+      <stop offset=".8" stop-color="#7a5cff"/>
+      <stop offset="1" stop-color="#37b6f5"/>
+    </linearGradient>
+    <linearGradient id="at" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#cfe4ff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#9fd8ff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#9fd8ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- 深蓝紫渐变底：圆角方 -->
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="url(#bg)"/>
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="3"/>
+  <!-- 星点 -->
+  <g fill="#ffffff">
+    <circle cx="86" cy="96" r="5" opacity=".9"/><circle cx="150" cy="56" r="3.4" opacity=".6"/>
+    <circle cx="424" cy="82" r="4.4" opacity=".85"/><circle cx="462" cy="170" r="3.2" opacity=".55"/>
+    <circle cx="58" cy="238" r="3.4" opacity=".6"/><circle cx="448" cy="356" r="4.6" opacity=".8"/>
+    <circle cx="96" cy="428" r="4" opacity=".7"/><circle cx="356" cy="452" r="3.2" opacity=".55"/>
+    <circle cx="256" cy="66" r="3" opacity=".7"/>
+  </g>
+  <!-- 中心光晕 -->
+  <circle cx="256" cy="256" r="168" fill="url(#glow)"/>
+  <!-- 轨道 -->
+  <g fill="none" stroke="#ffffff" stroke-opacity=".65" stroke-width="7">
+    <ellipse cx="256" cy="256" rx="196" ry="86" transform="rotate(-24 256 256)"/>
+    <ellipse cx="256" cy="256" rx="196" ry="86" transform="rotate(52 256 256)" stroke-opacity=".4"/>
+  </g>
+  <!-- 节点连线（星座） -->
+  <g stroke="#bfe0ff" stroke-width="6" stroke-linecap="round" opacity=".9">
+    <line x1="256" y1="256" x2="120" y2="150"/>
+    <line x1="256" y1="256" x2="398" y2="168"/>
+    <line x1="256" y1="256" x2="352" y2="382"/>
+    <line x1="256" y1="256" x2="142" y2="360"/>
+  </g>
+  <!-- 轨道与星座节点 -->
+  <g>
+    <circle cx="120" cy="150" r="21" fill="#ffd166" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="398" cy="168" r="17" fill="#37d5f5" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="352" cy="382" r="19" fill="#ff8fab" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="142" cy="360" r="15" fill="#7bf1c8" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="330" cy="104" r="11" fill="#ffffff"/>
+    <circle cx="96" cy="272" r="10" fill="#ffffff" opacity=".85"/>
+  </g>
+  <!-- 中央 @ ：账号的象征 -->
+  <circle cx="256" cy="256" r="86" fill="#0d1130" fill-opacity=".38" stroke="#ffffff" stroke-opacity=".5" stroke-width="3"/>
+  <text x="256" y="300" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="118" font-weight="700" fill="url(#at)">@</text>
+</svg>
