@@ -1,14 +1,17 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 /// 全屏 WKWebView 壳：加载打包在 App 内的本地网页（Web/index.html）。
 ///
-/// 做四件事：
+/// 做五件事：
 /// 1. 打开 JavaScript 与 DOM 存储（localStorage）——网页的数据层全靠它。
 /// 2. 外链（网页里「前往登录」用 window.open 打开的 https 链接）交给
 ///    SFSafariViewController，不困在 WebView 里。
 /// 3. 注入 ExportBridge.js，把 blob 导出转成原生分享面板（见 ExportBridge.js 注释）。
 /// 4. 文件导入（<input type=file>）由 WKWebView 系统文件选择器原生支持，无需额外代码。
+/// 5. 震动桥：网页点按底栏标签/搜索钮时经 `haptic` 消息喊一声，这里用
+///    UIImpactFeedbackGenerator 轻震一次（iOS Safari 不支持网页震动，只能壳里补）。
 struct WebView: UIViewRepresentable {
     var onOpenExternal: (URL) -> Void
 
@@ -26,6 +29,8 @@ struct WebView: UIViewRepresentable {
         // 导出桥：消息处理器 + document start 注入脚本
         let controller = config.userContentController
         controller.add(context.coordinator, name: "exportFile")
+        // 震动桥：网页 buzz() 的壳内通道（见下方 didReceive 的 haptic 分支）
+        controller.add(context.coordinator, name: "haptic")
         if let scriptURL = Bundle.main.url(forResource: "ExportBridge", withExtension: "js"),
            let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
             let userScript = WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
@@ -84,9 +89,15 @@ struct WebView: UIViewRepresentable {
             decisionHandler(.allow)
         }
 
-        // 导出桥消息：{name, base64} → 写临时文件 → 系统分享面板
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
+            // 震动桥消息：网页点按底栏时发来（body 不用管）→ 原生轻震一次
+            if message.name == "haptic" {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                return
+            }
+
+            // 导出桥消息：{name, base64} → 写临时文件 → 系统分享面板
             guard message.name == "exportFile",
                   let body = message.body as? [String: Any],
                   let name = body["name"] as? String,

@@ -28,6 +28,8 @@ ios-app/
 - **导出备份真能存文件**：网页版导出是 blob 下载，WKWebView 默认静默失败。
   壳注入 `ExportBridge.js` 拦截 blob 下载 → 原生写临时文件 → 弹系统分享面板，自己选「存到文件」。
 - **外链不困在壳里**：「前往登录」的 https 链接（window.open）改用 SFSafariViewController 打开。
+- **底栏点按有震动**：iOS Safari 不支持网页震动，网页侧 `buzz()` 在壳内改走 `haptic` 消息桥，
+  `WebView.swift` 收到后用 `UIImpactFeedbackGenerator(.light)` 轻震一次（安卓 Chrome 走 `navigator.vibrate`，不需要桥）。
 - 文件导入（密码库 JSON / CSV）走 WKWebView 自带的系统文件选择器，原生支持。
 - JavaScript、localStorage（DOM 存储）已打开；WebDAV 是 https 且服务端有 CORS `*`，壳内可直连。
 

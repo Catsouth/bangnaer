@@ -63,7 +63,7 @@ function stubOffsets(win) {
     const dlgD = doc.getElementById("dlgDav"); let davOpened = false; dlgD.showModal = () => { davOpened = true; };
     doc.getElementById("btnDav").click();
     ok("设置页「WebDAV 备份」打开原 dlgDav", davOpened);
-    ok("WebDAV 副标题=未设置文案", doc.getElementById("setDavSub").textContent.includes("未设置"), doc.getElementById("setDavSub").textContent);
+    ok("WebDAV 状态=未开启文案", doc.getElementById("setDavSub").textContent.includes("未开启"), doc.getElementById("setDavSub").textContent);
     // 隐私开关翻转
     const sw = doc.getElementById("btnPrivacy");
     const before = sw.classList.contains("on"); sw.click(); await sleep(20);
@@ -76,10 +76,15 @@ function stubOffsets(win) {
     // 导出行
     let eerr = null; try { doc.getElementById("btnExport").click(); await sleep(20); } catch (e) { eerr = e; }
     ok("设置页「导出 JSON」点击不报错", !eerr, eerr && eerr.message);
-    // 搜索圆按钮 → 切全部 App 页
+    // 搜索圆按钮 → 原地展开搜索层（v1.10.0：不跳页）
     doc.getElementById("btnTabSearch").click(); await sleep(30);
-    ok("搜索圆按钮切到全部 App 页", doc.getElementById("pageApps").style.display !== "none");
-    ok("透镜跟随到第2个标签", lens.style.transform.includes("translateX(77px)"), lens.style.transform);
+    ok("搜索圆按钮原地展开搜索层", doc.getElementById("searchOverlay").classList.contains("open"));
+    ok("搜索不跳页（仍停在设置页）", doc.getElementById("pageSettings").style.display !== "none" && doc.getElementById("pageApps").style.display === "none");
+    doc.getElementById("soCancel").click(); await sleep(10);
+    ok("点取消关层且不跳页", !doc.getElementById("searchOverlay").classList.contains("open") && doc.getElementById("pageSettings").style.display !== "none");
+    // 设置页「下载新版本」行：指向 GitHub Releases
+    const rel = doc.getElementById("btnRelease");
+    ok("设置页有下载新版本行指向 Releases", !!rel && (rel.getAttribute("href") || "").includes("github.com/Catsouth/bangnaer/releases"));
     dom.window.close();
   }
 
@@ -94,6 +99,16 @@ function stubOffsets(win) {
     ok("旧 DB 全部 App 页有体检面板", (doc.getElementById("healthBox").textContent || "").length > 0);
     doc.querySelectorAll(".tabbtn")[2].click(); await sleep(60);
     ok("旧 DB 关系图渲染不报错", !!doc.getElementById("graphBox"));
+    /* 原地搜索：不跳页、拼音/子串出结果、点结果开服务详情并关层 */
+    let svcOpened = false; doc.getElementById("dlgSvcEdit").showModal = () => { svcOpened = true; };
+    doc.getElementById("btnTabSearch").click(); await sleep(30);
+    ok("在关系图页点搜索只开层不跳页", doc.getElementById("searchOverlay").classList.contains("open") && doc.getElementById("pageGraph").style.display !== "none");
+    const soIn = doc.getElementById("soInput");
+    soIn.value = "git"; soIn.dispatchEvent(new dom.window.Event("input", { bubbles: true })); await sleep(20);
+    const row = doc.querySelector("#soResults .svc");
+    ok("搜 git 出 GitHub 结果行", !!row && row.textContent.includes("GitHub"), row && row.textContent.slice(0, 40));
+    if (row) { row.click(); await sleep(20); }
+    ok("点结果打开服务详情 Sheet 且搜索层关闭", svcOpened && !doc.getElementById("searchOverlay").classList.contains("open"));
     dom.window.close();
   }
 
@@ -149,6 +164,24 @@ function stubOffsets(win) {
     win.eval("DB.identities=DB.identities.filter(i=>i.id!=='a1');DB.links=DB.links.filter(l=>l.identityId!=='a1');save()");
     const saved2 = JSON.parse(win.localStorage.getItem("atlas-db"));
     ok("删身份连带删 links（数据层）", saved2.links.length === 1 && saved2.links[0].id === "l2");
+    dom.window.close();
+  }
+
+  /* ---------- E. 清空全部数据：只清本机、不 PUT 云端 ---------- */
+  {
+    const dav = JSON.stringify({ url: "https://dav.example.com/dav/atlas.json", user: "u", pass: "p" });
+    const data = { identities: [{ id: "a1", type: "email", value: "me@example.com", label: "" }], links: [{ id: "l1", identityId: "a1", domain: "github.com", name: "GitHub", username: "me" }], trash: [], updatedAt: 9000 };
+    const { dom, fetchCalls } = makeDom({ ls: { "atlas-dav": dav, "atlas-db": JSON.stringify(data) } });
+    const win = dom.window, doc = win.document;
+    win.confirm = () => true;
+    await sleep(60);
+    doc.querySelectorAll(".tabbtn")[3].click(); await sleep(20);
+    doc.getElementById("btnWipe").click(); await sleep(30);
+    const saved = JSON.parse(win.localStorage.getItem("atlas-db"));
+    ok("清空后本机 identities/links 归零", saved.identities.length === 0 && saved.links.length === 0);
+    await sleep(2400); // 等任何防抖上传窗口过去
+    const puts = fetchCalls.filter(c => c.method === "PUT").length;
+    ok("清空全部数据不 PUT（云端备份未动）", puts === 0, "PUT=" + puts);
     dom.window.close();
   }
 

@@ -136,6 +136,84 @@ const chips = doc => [...doc.querySelectorAll("[data-gchip]")];
     dom.window.close();
   }
 
+  /* ---------- C. v1.10.1：初始落位按包围盒（居中、略偏下），切 chips 重新落位 ---------- */
+  {
+    const { dom } = makeDom({ ls: { "atlas-db": JSON.stringify({
+      identities: [
+        { id: "e1", type: "email", value: "a@x.com", label: "" },
+        { id: "e2", type: "email", value: "b@x.com", label: "" },
+        { id: "p1", type: "phone", value: "13500000000", label: "" },
+        { id: "w1", type: "wechat", value: "wx_one", label: "" }
+      ],
+      links: [
+        { id: "l1", identityId: "e1", domain: "a.com", name: "A站", username: "u1", method: "密码登录", status: "active", createdAt: 1 },
+        { id: "l2", identityId: "e1", domain: "b.com", name: "B站", username: "u1", method: "密码登录", status: "active", createdAt: 2 },
+        { id: "l3", identityId: "e2", domain: "a.com", name: "A站", username: "u2", method: "Google 授权", status: "active", createdAt: 3 },
+        { id: "l4", identityId: "p1", domain: "c.com", name: "C站", username: "u3", method: "手机号验证码", status: "active", createdAt: 4 },
+        { id: "l5", identityId: "w1", domain: "d.com", name: "D站", username: "u4", method: "微信授权", status: "active", createdAt: 5 }
+      ],
+      updatedAt: 1000
+    }) } });
+    const win = dom.window, doc = win.document;
+    await sleep(60);
+    /* 纯函数：包围盒/缩放/平移的数学先钉死（不依赖 DOM） */
+    ok("落位函数在位（galaxyBBox/galaxyFitScale/galaxyFitPan）",
+      ["galaxyBBox", "galaxyFitScale", "galaxyFitPan"].every(f => typeof win[f] === "function"));
+    const bbT = win.galaxyBBox(168, 168, [[-54, 93.5], [54, 93.5]], 23);
+    ok("galaxyBBox：偏下双气泡的包围盒中心在世界中心下方（cy=208.25）",
+      Math.abs(bbT.w - 154) < 0.01 && Math.abs(bbT.h - 152.5) < 0.01 && Math.abs(bbT.cx - 168) < 0.01 && Math.abs(bbT.cy - 208.25) < 0.01,
+      `w=${bbT.w} h=${bbT.h} cx=${bbT.cx} cy=${bbT.cy}`);
+    const panT = win.galaxyFitPan(bbT, 168, 168, 1.25, 336);
+    ok("galaxyFitPan：包围盒中心映射到画布（中线, 56% 高）",
+      Math.abs((bbT.cx - 168) * 1.25 + panT.x) < 0.01 && Math.abs((168 + (bbT.cy - 168) * 1.25 + panT.y) - 336 * 0.56) < 0.01,
+      `pan=${panT.x},${panT.y}`);
+    ok("galaxyFitScale：不小于原 f（大图不缩）、封顶 1.25（小图不爆）",
+      win.galaxyFitScale({ w: 900, h: 900 }, 0.6, 360, 336) === 0.6 && win.galaxyFitScale({ w: 10, h: 10 }, 1, 360, 336) === 1.25);
+    /* DOM 集成：jsdom 无布局，clientWidth=0 → 代码回退 stageW=360，公式照常跑 */
+    const STAGE_W = 360;
+    const readFit = () => {
+      const st = doc.getElementById("gstage"), world = st.querySelector(".gworld");
+      const m = (world.style.transform || "").match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/);
+      if (!m) return null;
+      const worldW = parseFloat(world.style.width), cx = worldW / 2, cy = worldW / 2;
+      const bubR = parseFloat(world.style.getPropertyValue("--bub")) / 2;
+      const core = st.querySelector(".gcore"), coreR = core ? parseFloat(core.style.width) / 2 : 36;
+      let x0 = cx - coreR, x1 = cx + coreR, y0 = cy - coreR, y1 = cy + coreR;
+      bubs(doc).forEach(b => {
+        const bx = parseFloat(b.style.left), by = parseFloat(b.style.top);
+        x0 = Math.min(x0, bx - bubR); x1 = Math.max(x1, bx + bubR); y0 = Math.min(y0, by - bubR); y1 = Math.max(y1, by + bubR);
+      });
+      return { pan: { x: +m[1], y: +m[2] }, s: +m[3], stageH: parseFloat(st.style.height), cx, cy,
+               bb: { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, x0, x1, y0, y1 }, tf: world.style.transform };
+    };
+    const checkFit = (name, F) => {
+      const mx = STAGE_W / 2 + (F.bb.cx - F.cx) * F.s + F.pan.x, my = F.stageH / 2 + (F.bb.cy - F.cy) * F.s + F.pan.y;
+      ok(name + "：包围盒中心落在画布中线、垂直 56%",
+        Math.abs(mx - STAGE_W / 2) < 1.6 && Math.abs(my - F.stageH * 0.56) < 1.6, `mapped=${mx.toFixed(1)},${my.toFixed(1)} stageH=${F.stageH}`);
+      const ex0 = STAGE_W / 2 + (F.bb.x0 - F.cx) * F.s + F.pan.x, ex1 = STAGE_W / 2 + (F.bb.x1 - F.cx) * F.s + F.pan.x;
+      const ey0 = F.stageH / 2 + (F.bb.y0 - F.cy) * F.s + F.pan.y, ey1 = F.stageH / 2 + (F.bb.y1 - F.cy) * F.s + F.pan.y;
+      ok(name + "：整群完整可见不溢出",
+        ex0 >= -1 && ex1 <= STAGE_W + 1 && ey0 >= -1 && ey1 <= F.stageH + 1,
+        `x:${ex0.toFixed(1)}~${ex1.toFixed(1)} y:${ey0.toFixed(1)}~${ey1.toFixed(1)}`);
+    };
+    doc.querySelectorAll(".tabbtn")[2].click(); await sleep(60);
+    doc.querySelector('[data-gchip="e1"]').click(); await sleep(40);
+    const fitE1 = readFit();
+    ok("e1 视图（双气泡偏下）初始落位非旧版 (0,0)+原缩放", !!fitE1 && (Math.abs(fitE1.pan.y) > 5 || fitE1.s > 1.05), fitE1 && fitE1.tf);
+    if (fitE1) checkFit("e1 视图", fitE1);
+    doc.querySelector('[data-gchip="all"]').click(); await sleep(40);
+    const fitAll = readFit();
+    ok("切回全部：重新落位（transform 变化）", !!fitAll && !!fitE1 && fitAll.tf !== fitE1.tf, fitAll && fitAll.tf);
+    if (fitAll) checkFit("全部视图", fitAll);
+    doc.querySelector('[data-gchip="e1"]').click(); await sleep(40);
+    const fitE1b = readFit();
+    ok("再切回 e1：落位确定性复现（与首次一致）", !!fitE1b && !!fitE1 && fitE1b.tf === fitE1.tf, fitE1b && fitE1b.tf);
+    bubs(doc)[0].click(); await sleep(40);
+    const fitAfterTap = readFit();
+    ok("同范围内点气泡重渲染：保留当前平移不重落位", !!fitAfterTap && !!fitE1b && fitAfterTap.tf === fitE1b.tf, fitAfterTap && fitAfterTap.tf);
+    dom.window.close();
+  }
+
   console.log(fails ? `\n${fails} FAIL` : "\nALL_GALAXY_TESTS_OK");
   process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERR", e); process.exit(1); });
