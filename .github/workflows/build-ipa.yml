@@ -15,6 +15,9 @@ on:
 jobs:
   build-ipa:
     runs-on: macos-latest
+    # 发行版（Release）要用内置 GITHUB_TOKEN 建/改，必须给 contents 写权限。
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,3 +91,22 @@ jobs:
           name: bangnaer-unsigned-ipa
           path: bangnaer-unsigned.ipa
           if-no-files-found: error
+
+      # 构建成功后同步发一个 GitHub Release，把 IPA 直接挂到仓库「发行版」里：
+      # 手机上打开 Releases 页就能点最新版下载，不用再去 Actions 里翻构建产物。
+      # 标签跟版本号走（v<VERSION>）；同版本重跑时 --clobber 覆盖旧 IPA 并保持最新标记。
+      - name: Publish GitHub Release with IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="v$VERSION"
+          NOTES="绑哪儿 v$VERSION 未签名 IPA：下载 bangnaer-unsigned.ipa 后，用你自己的证书签名安装。壳 App 与 Safari 数据隔离，首次打开请在「设置 → WebDAV」拉一次备份恢复数据。"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" bangnaer-unsigned.ipa --clobber
+            gh release edit "$TAG" --title "绑哪儿 $TAG（未签名 IPA）" --notes "$NOTES" --latest
+          else
+            gh release create "$TAG" bangnaer-unsigned.ipa --title "绑哪儿 $TAG（未签名 IPA）" --notes "$NOTES" --latest
+          fi
+          gh release view "$TAG"
