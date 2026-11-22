@@ -12,3 +12,24 @@
 "设置 PIN" = "Set PIN";
 "修改 PIN" = "Change PIN";
 "关闭 PIN" = "Turn Off PIN";
+
+/* Batch 2: Smart Import / more login providers */
+"智能导入" = "Smart Import";
+"选择导出文件" = "Choose Export File";
+"从文件导入" = "Import from File";
+"粘贴文本" = "Paste Text";
+"扫描这段文本" = "Scan This Text";
+"载入剪贴板并识别" = "Load Clipboard & Recognize";
+"新身份卡" = "New Identity Cards";
+"服务与绑定" = "Services & Bindings";
+"清空候选" = "Clear Candidates";
+"已绑定" = "Already Bound";
+"新增绑定" = "New Binding";
+"新服务" = "New Service";
+"不太确定" = "Not Sure";
+"登录账号" = "Login Account";
+"全选" = "Select All";
+"全不选" = "Select None";
+"只选高置信" = "High Confidence Only";
+"先不绑" = "Don't Bind";
+"自动识别" = "Auto-recognized";

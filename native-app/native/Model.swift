@@ -60,7 +60,8 @@ struct Identity: Codable, Identifiable, Hashable {
   var order: Double? = nil
   /// phone only: an eSIM (no physical card). Written only when true; the key is omitted otherwise.
   var esim: Bool? = nil
-  /// login only: "wechat" | "apple"
+  /// login only: "wechat" | "apple" | "qq" | "google" | "custom" (free string: unknown
+  /// values from other clients round-trip untouched and display as 登录账号）
   var provider: String? = nil
   /// login only: id of the email / phone identity it is bound to. Omitted when empty; a dangling id counts as none.
   var via: String? = nil
@@ -111,19 +112,62 @@ struct Identity: Codable, Identifiable, Hashable {
   var isESim: Bool { isPhone && esim == true }
   var isLogin: Bool { type == "login" }
   var isApple: Bool { isLogin && provider == "apple" }
-  /// 微信 / Apple 账户 (login cards), 手机号, 邮箱
-  var kindName: String { isLogin ? (isApple ? "Apple 账户" : "微信") : isPhone ? "手机号" : "邮箱" }
+  /// 登录卡按 provider 显示（微信 / Apple 账户 / QQ / Google / 自定义，未知值回退「登录账号」），手机号, 邮箱
+  var kindName: String { isLogin ? LoginProviders.name(provider) : isPhone ? "手机号" : "邮箱" }
 }
 
 let KINDS = ["email", "phone", "login"]
-func loginDefaultColor(_ provider: String) -> String { provider == "apple" ? "#1d1d1f" : "#07c160" }
-/// 微信号: at least one character. Apple ID: an email, or a phone number (≥5 digits).
+
+// MARK: - login providers （绑哪儿第二批扩类型）
+//
+// Storage stays the free-form `provider` string on Identity; this table only drives
+// display name / default card colour / glyph / value validation, so providers written
+// by other clients (or a future build) never break decoding — they fall back to the
+// generic 登录账号 name and key glyph. Colours follow the web app's type colours
+// (QQ #12b7f5, Google #4285f4); custom uses neutral grey per product call (web used purple).
+struct LoginProviderInfo {
+  let key: String
+  let name: String
+  let color: String
+  let symbol: String
+}
+
+enum LoginProviders {
+  static let all: [LoginProviderInfo] = [
+    LoginProviderInfo(key: "wechat", name: "微信", color: "#07c160", symbol: "bubble.left.and.bubble.right.fill"),
+    LoginProviderInfo(key: "apple", name: "Apple 账户", color: "#1d1d1f", symbol: "apple.logo"),
+    LoginProviderInfo(key: "qq", name: "QQ", color: "#12b7f5", symbol: "q.circle.fill"),
+    LoginProviderInfo(key: "google", name: "Google", color: "#4285f4", symbol: "g.circle.fill"),
+    LoginProviderInfo(key: "custom", name: "自定义", color: "#8e8e93", symbol: "person.badge.key.fill"),
+  ]
+  static func info(_ provider: String?) -> LoginProviderInfo? {
+    guard let p = provider, !p.isEmpty else { return nil }
+    return all.first { $0.key == p }
+  }
+  static func name(_ provider: String?) -> String { info(provider)?.name ?? "登录账号" }
+  static func defaultColor(_ provider: String?) -> String { info(provider)?.color ?? "#07c160" }
+  static func symbol(_ provider: String?) -> String { info(provider)?.symbol ?? "person.badge.key.fill" }
+}
+
+func loginDefaultColor(_ provider: String) -> String { LoginProviders.defaultColor(provider) }
+
+func isEmailShape(_ v: String) -> Bool {
+  v.range(of: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", options: .regularExpression) != nil
+}
+/// Per-provider value rules. 微信 / QQ / 自定义: any non-empty value (QQ accepts digits or an
+/// email). Apple ID: an email, or a phone number (≥5 digits). Google: must look like an email.
 func loginValueValid(provider: String, value: String) -> Bool {
   let v = value.trimmingCharacters(in: .whitespaces)
   if v.isEmpty { return false }
-  if provider != "apple" { return true }
-  if v.range(of: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", options: .regularExpression) != nil { return true }
-  return v.allSatisfy { $0.isNumber || " +-()".contains($0) } && v.filter(\.isNumber).count >= 5
+  switch provider {
+  case "apple":
+    if isEmailShape(v) { return true }
+    return v.allSatisfy { $0.isNumber || " +-()".contains($0) } && v.filter(\.isNumber).count >= 5
+  case "google":
+    return isEmailShape(v)
+  default:
+    return true
+  }
 }
 
 struct Account: Codable, Identifiable, Hashable {
@@ -285,7 +329,7 @@ struct AtlasIndex {
   var recent: [Account] = []                     // newest 5
   var emails: [Identity] = []
   var phones: [Identity] = []
-  var logins: [Identity] = []                    // 微信 / Apple
+  var logins: [Identity] = []                    // 登录账号（微信 / Apple / QQ / Google / 自定义，按 provider 区分）
   var boundLogins: [String: [Identity]] = [:]    // email/phone id -> login cards bound to it
   var categoryCount: [String: Int] = [:]
   var categories: [String] = []
@@ -385,6 +429,7 @@ final class Store {
     if i.type == "email" { return mail(i.value) }
     if i.isLogin {
       if i.isApple { return i.value.contains("@") ? mail(i.value) : number(i.value) }
+      if i.value.contains("@") { return mail(i.value) }   // Google 等邮箱形态的登录账号按邮箱打码
       return String(i.value.prefix(2)) + "•••"
     }
     return number(i.value)

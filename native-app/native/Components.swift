@@ -27,10 +27,13 @@ let SKINS: [(String, Skin)] = [
   ("#3a3a3c", Skin(name: "曜石", stops: [("#76767c", 0), ("#3a3a3c", 0.46), ("#0d0d10", 1)])),
 ]
 let COLORS = SKINS.map(\.0)
-/// default faces of login cards: WeChat green and Apple graphite (the user can pick any skin)
+/// default faces of login cards, one per provider (the user can pick any skin)
 let LOGIN_SKINS: [(String, Skin)] = [
   ("#07c160", Skin(name: "微信绿", stops: [("#6be39b", 0), ("#07c160", 0.45), ("#03704f", 1)])),
   ("#1d1d1f", Skin(name: "石墨", stops: [("#b4b6bb", 0), ("#55575d", 0.36), ("#1d1d1f", 1)])),
+  ("#12b7f5", Skin(name: "QQ 蓝", stops: [("#7ce3fc", 0), ("#12b7f5", 0.45), ("#0a6ecf", 1)])),
+  ("#4285f4", Skin(name: "谷歌蓝", stops: [("#8ab4ff", 0), ("#4285f4", 0.45), ("#1a56c4", 1)])),
+  ("#8e8e93", Skin(name: "云灰", stops: [("#d1d1d6", 0), ("#8e8e93", 0.45), ("#48484a", 1)])),
 ]
 
 func skinGradient(_ c: String) -> LinearGradient {
@@ -369,19 +372,27 @@ struct IdentityGlyph: View {
   var size: CGFloat
   var body: some View {
     if identity.isESim { Text("eSIM").font(.system(size: size * 0.8, weight: .bold, design: .rounded)) }
-    else if identity.isLogin { LoginGlyph(apple: identity.isApple, size: size, filled: true) }
+    else if identity.isLogin { LoginGlyph(provider: identity.provider, size: size, filled: true) }
     else { Image(systemName: identity.isPhone ? "simcard.fill" : "envelope.fill").font(.system(size: size, weight: .semibold)) }
   }
 }
 
-/// 微信: a plain two-bubble outline (not the official logo artwork). Apple: the SF Symbol.
+/// Login provider glyphs (plain SF Symbols / shapes, never official logo artwork):
+/// 微信 two bubbles, Apple the SF apple, QQ / Google letter circles, 自定义/未知 a key badge.
 struct LoginGlyph: View {
-  let apple: Bool
+  let provider: String?
   var size: CGFloat
   var filled = false
   var body: some View {
-    Image(systemName: apple ? "apple.logo" : (filled ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right"))
-      .font(.system(size: size, weight: apple ? .semibold : .medium))
+    Image(systemName: symbol)
+      .font(.system(size: size, weight: provider == "apple" ? .semibold : .medium))
+  }
+  var symbol: String {
+    switch provider {
+    case "apple": return "apple.logo"
+    case "wechat": return filled ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right"
+    default: return LoginProviders.symbol(provider)
+    }
   }
 }
 
@@ -401,7 +412,7 @@ struct WalletCard: View {
       VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .top) {
           HStack(spacing: 8) {
-            if i.isESim { ESimBadge() } else if i.isPhone { Chip() } else if i.isLogin { LoginGlyph(apple: i.isApple, size: 17) } else { Image(systemName: "envelope").font(.system(size: 17, weight: .medium)) }
+            if i.isESim { ESimBadge() } else if i.isPhone { Chip() } else if i.isLogin { LoginGlyph(provider: i.provider, size: 17) } else { Image(systemName: "envelope").font(.system(size: 17, weight: .medium)) }
             Text(cardTitle(i)).font(.system(size: 16, weight: .semibold)).lineLimit(1)
           }
           Spacer()
@@ -440,7 +451,8 @@ struct WalletCard: View {
   func footNote(_ i: Identity) -> String {
     if i.isLogin {
       if let v = store.via(i) { return "绑定 " + store.title(v) }
-      return i.notes.isEmpty ? (i.isApple ? "Apple ID" : "微信号") : i.notes
+      let fallback = i.isApple ? "Apple ID" : i.provider == "wechat" ? "微信号" : i.provider == "qq" ? "QQ 号" : i.kindName
+      return i.notes.isEmpty ? fallback : i.notes
     }
     if i.isPhone {
       let c = carrier(i.value)

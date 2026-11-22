@@ -60,6 +60,7 @@ struct SettingsSheet: View {
         Section {
           Button { doc = BackupDoc(data: store.backupJSON()); exporting = true } label: { Label("导出备份", systemImage: "square.and.arrow.up") }
           Button { importing = true } label: { Label("导入备份", systemImage: "square.and.arrow.down") }
+          NavigationLink { SmartImportView() } label: { Label("智能导入", systemImage: "sparkles") }
           NavigationLink { TrashView() } label: {
             HStack {
               Label("回收站", systemImage: "trash")
@@ -72,7 +73,7 @@ struct SettingsSheet: View {
           if !sync.on {
             Button { store.mutate("已载入示例") { s in s = Store.demo() }; store.data.demo = true; store.persist(); store.setKind("email") } label: { Label("载入示例", systemImage: "text.badge.plus") }
           }
-        } footer: { Text("备份是 JSON 文件，和网页版通用。") }
+        } footer: { Text("备份是 JSON 文件，和网页版通用。智能导入从密码管理器导出、浏览器密码表或一段文字里认出服务和绑定关系，只读网址和账号名，不读密码。") }
         Section {
           Link(destination: URL(string: "https://github.com/Catsouth/bangnaer/releases/latest")!) {
             HStack {
@@ -125,15 +126,18 @@ struct OrderView: View {
   @Environment(Store.self) var store
   var body: some View {
     List {
-      group("email", "邮箱")
-      group("phone", "手机号")
-      group("login", "登录")
+      group("邮箱") { $0.type == "email" }
+      group("手机号") { $0.type == "phone" }
+      ForEach(LoginProviders.all, id: \.key) { p in
+        group(p.name) { $0.isLogin && $0.provider == p.key }
+      }
+      group("登录账号") { $0.isLogin && LoginProviders.info($0.provider) == nil }
     }
     .environment(\.editMode, .constant(.active))
     .navigationTitle("卡片顺序").navigationBarTitleDisplayMode(.inline)
   }
-  @ViewBuilder func group(_ type: String, _ title: String) -> some View {
-    let list = store.data.identities.filter { $0.type == type }
+  @ViewBuilder func group(_ title: String, match: @escaping (Identity) -> Bool) -> some View {
+    let list = store.data.identities.filter(match)
     if !list.isEmpty {
       Section {
         ForEach(list) { i in
@@ -147,20 +151,27 @@ struct OrderView: View {
             }
           }.padding(.vertical, 2)
         }
-        .onMove { from, to in move(type, from, to) }
-      } header: { Text(title) } footer: { if type == lastType { Text("拖动右侧把手排序，排在第一位的卡会在卡包里最先出现。") } }
+        .onMove { from, to in move(match, from, to) }
+      } header: { Text(title) } footer: { if title == lastTitle { Text("拖动右侧把手排序，排在第一位的卡会在卡包里最先出现。") } }
     }
   }
   /// the footer hint goes under the last group shown
-  var lastType: String { ["login", "phone", "email"].first { t in store.data.identities.contains { $0.type == t } } ?? "email" }
-  func move(_ type: String, _ from: IndexSet, _ to: Int) {
+  var lastTitle: String {
+    var titles: [String] = []
+    if store.data.identities.contains(where: { $0.type == "email" }) { titles.append("邮箱") }
+    if store.data.identities.contains(where: { $0.type == "phone" }) { titles.append("手机号") }
+    for p in LoginProviders.all where store.data.identities.contains(where: { $0.isLogin && $0.provider == p.key }) { titles.append(p.name) }
+    if store.data.identities.contains(where: { $0.isLogin && LoginProviders.info($0.provider) == nil }) { titles.append("登录账号") }
+    return titles.last ?? "邮箱"
+  }
+  /// reorder only the slots this group occupies, so other groups keep their places
+  func move(_ match: @escaping (Identity) -> Bool, _ from: IndexSet, _ to: Int) {
     store.mutate(nil) { s in
-      var list = s.identities.filter { $0.type == type }
+      let slots = s.identities.indices.filter { match(s.identities[$0]) }
+      var list = slots.map { s.identities[$0] }
       list.move(fromOffsets: from, toOffset: to)
       for k in list.indices { list[k].order = Double(k) }
-      let others = s.identities.filter { $0.type != type }
-      func of(_ t: String) -> [Identity] { t == type ? list : others.filter { $0.type == t } }
-      s.identities = of("email") + of("phone") + of("login") + others.filter { !KINDS.contains($0.type) }
+      for (slot, el) in zip(slots, list) { s.identities[slot] = el }
     }
   }
 }

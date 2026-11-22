@@ -27,7 +27,8 @@ Sync.swift、WalletView.swift，外加 Info.plist 与 lproj/ 本地化目录
 绑哪儿自研新增（不在上游内，swiftc 通配 `native/*.swift` 自动纳入构建，
 无需改工程文件）：WebDAV.swift（WebDAV 备份 + Keychain 封装）、Trash.swift
 （回收站）、Lock.swift（PIN 屏幕锁），2026-11-23 第一批功能移植时加入；
-三套 lproj 各补 Localizable.strings（新功能主要文案）。
+SmartImport.swift（智能导入：识别引擎 + 候选预览页），2026-11-23 第二批
+功能移植时加入；三套 lproj 各补 Localizable.strings（新功能主要文案）。
 
 一并引入：
 - `icons/` → `native-app/icons/`（实测 112 个第三方服务图标，按域名命名，
@@ -148,7 +149,7 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
 
 ## 文本推送清单（native-app/，最终版）
 
-我方 GitHub 快照推送通道只接受 UTF-8 文本文件，以下 30 条为 native-app/
+我方 GitHub 快照推送通道只接受 UTF-8 文本文件，以下 31 条为 native-app/
 下应推送的全部文本路径（父代理照单推送；LICENSE 与 NOTICE.md 在仓库
 根目录、属仓库级文件，不在本清单内）：
 
@@ -182,6 +183,7 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
 28. `native-app/native/lproj/Base.lproj/Localizable.strings`
 29. `native-app/native/lproj/en.lproj/Localizable.strings`
 30. `native-app/native/lproj/zh-Hans.lproj/Localizable.strings`
+31. `native-app/native/SmartImport.swift`（第二批移植新增：智能导入）
 
 明确排除（勿推）：`native-app/icons/*.png`（112 个，CI 生成）、
 `native-app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png`（CI 生成）、
@@ -262,10 +264,59 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    - 可选面容 ID：开启 PIN 后可在设置里开「面容 ID 解锁」（LocalAuthentication，
      锁屏出现时自动尝试一次 + 键盘区有按钮重试），失败回落 PIN。
 
+### 第二批（已实现，2026-11-23，本地提交未推送）
+
+1. **自动识别导入**（新增 `native-app/native/SmartImport.swift`；入口在设置页
+   与「导入备份」同区，名为「智能导入」）
+   - 行为对齐网页版识别引擎（identityFor / addCandidate / parseVault /
+     parseCsv / parseText）：身份判定顺序含 @ → 邮箱、1 开头 11 位 → 手机号
+     （先于 QQ）、纯数字 + 来源 qq.com → QQ、其余号码形 → 手机号。
+   - 三路来源：①文件——Vaultwarden/Bitwarden 未加密导出 JSON（items[].login
+     的 uris + username；加密导出与绑哪儿自身备份都有人话拦截提示）、浏览器
+     密码 CSV（Chrome/Edge 的 name,url,username,password 与 Safari 的
+     Title,URL,Username,… 都按表头取列，无表头退回网页版的列猜测；自写规范
+     CSV 分词处理引号/逗号转义）；②粘贴文本（邮箱/手机号正则 + 预设目录扫描，
+     文本猜的标低置信默认不勾）；③剪贴板（进页只查 hasStrings 不触发隐私
+     提示，点按钮才读内容并直接扫描）。
+   - **密码零接触**：login.password 键与 CSV 的 password 列从不读取、从不存储。
+   - 候选先预览后落库：逐条可勾选、可改服务名、可改绑定的身份（已有身份 /
+     本次新认出的身份 / 先不绑）；新身份单独成卡列出，勾选确认后才建卡
+     （标签「自动识别」），未勾选的新身份被引用时该条绑定跳过并计数（网页版
+     同口径）。
+   - **去重口径**（与网页版的静默跳过不同，按产品要求显式标注）：同域名 +
+     同身份已存在 → 「已绑定」默认不勾、落库跳过；同域名不同身份 →
+     「新增绑定」（往已有 Account 的 identityIds 追加，handle 为空时才用
+     识别到的账号名补）；无同域名服务 → 「新服务」（按预设分类建 Account，
+     无预设归「其他」）。候选内部再按 域名|身份|账号名 去重；整批一次
+     Store.mutate 落库（撤销、盖戳、墓碑语义不变）。示例数据按网页版口径：
+     识别与去重对着空库算，落库前先清示例。
+2. **身份卡扩类型**（存储不变：type 仍是 email/phone/login，provider 仍是
+   自由字符串；只扩集合与 UI，`Model.swift` 新增 LoginProviders 元数据表）
+   - provider 五种：wechat 微信 #07c160 / apple Apple 账户 #1d1d1f / qq QQ
+     #12b7f5 / google Google #4285f4 / custom 自定义 #8e8e93。默认色参照
+     网页版类型色（QQ 蓝、Google 蓝取网页值）；**自定义与网页版不同**：
+     网页版是紫 #b44fe8，本批按产品口径用中性灰，一行可改回。
+   - 符号：微信双气泡、Apple 用 apple.logo（沿用既有画法），QQ / Google 用
+     字母圆标（q.circle.fill / g.circle.fill），自定义与未知值用
+     person.badge.key.fill——都是 SF Symbol，不用官方 logo 图。
+   - 校验：apple 沿用邮箱或手机号；google 须邮箱形态；qq 宽松（数字或邮箱
+     均可，非空即可）；wechat / custom 不限。隐私打码：邮箱形态的登录账号
+     （Google 等）按邮箱规则打码。
+   - **分组修正**：kindName 改为按 provider 返回（此前非 apple 的 login 一律
+     显示「微信」是错的）；未知 provider 回退显示「登录账号」不崩，编辑表单
+     里原样保留、点选已知类型才改。卡片顺序页（OrderView）把原「登录」一
+     组拆成按 provider 分组，各组内拖动只动本组槽位，不再重排整个数组。
+   - 表单：新建/编辑身份给出五种 provider 选择（3 列胶囊）；custom 时标签
+     字段即平台名（存 label，卡片显示「自定义 · 平台名」）；占位文案、
+     字段标题、键盘类型、校验提示都按 provider 分开。LOGIN_SKINS 补
+     QQ 蓝 / 谷歌蓝 / 云灰三款，切 provider 时卡面跟随换色。
+   - 详情页「通过 X 登录的网站」改用 kindName（此前写死微信/Apple）；
+     卡包菜单与空卡文案「添加微信或 Apple 账号」改为「添加登录账号」。
+   - 数据衔接：转换器已写入的 3 张 provider="qq" 身份卡，本批后正确显示
+     为 QQ 卡（蓝色、QQ 分组）；extra.bindType 未动。
+
 ### 后续批次（待做）
 
-- 第二批：自动识别导入（Vaultwarden/Bitwarden 导出、浏览器密码 CSV、粘贴
-  文本、剪贴板）；身份卡扩类型（QQ / Google / 自定义）。
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；
   服务状态标记与筛选；换绑清单；账号体检。
 - 数据转换器反向（atlas 原生 → 网页版格式，如需双向迁移再补）。
@@ -276,7 +327,7 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    上游原生关系图是双列连线图，不满足我们的星系形态）→ 已排入第三批
 2. WebDAV 备份 → **已完成（第一批）**
 3. 自动识别导入（Vaultwarden/Bitwarden 导出、浏览器密码 CSV、粘贴文本识别——
-   网页版已有，原生端移植）→ 已排入第二批
+   网页版已有，原生端移植）→ **已完成（第二批）**
 4. 回收站 → **已完成（第一批）**
 5. PIN 屏幕锁 → **已完成（第一批）**
 6. 换绑清单、账号体检、服务状态（绑哪儿独有功能，原生端按网页版逻辑移植）

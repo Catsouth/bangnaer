@@ -36,14 +36,28 @@ struct IdentityForm: View {
     switch type {
     case "email": return "name@example.com"
     case "phone": return "+86 138 0000 0000"
-    default: return provider == "apple" ? "name@icloud.com 或手机号" : "wxid 或自定义微信号"
+    default:
+      switch provider {
+      case "apple": return "name@icloud.com 或手机号"
+      case "qq": return "QQ 号或 QQ 邮箱"
+      case "google": return "name@gmail.com"
+      case "custom": return "登录用的账号名"
+      default: return "wxid 或自定义微信号"
+      }
     }
   }
   var sample: String {
     switch type {
     case "email": return "name@example.com"
     case "phone": return "+86 138 0000 0000"
-    default: return provider == "apple" ? "name@icloud.com" : "wxid_example"
+    default:
+      switch provider {
+      case "apple": return "name@icloud.com"
+      case "qq": return "12345678"
+      case "google": return "name@gmail.com"
+      case "custom": return "my_account"
+      default: return "wxid_example"
+      }
     }
   }
   /// emails and phones a login card can be bound to
@@ -79,20 +93,31 @@ struct IdentityForm: View {
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
         if isLogin {
           Section {
-            HStack(spacing: 10) {
-              providerPill("wechat", "微信")
-              providerPill("apple", "Apple")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+              ForEach(LoginProviders.all, id: \.key) { p in providerPill(p.key, p.name) }
             }
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            if LoginProviders.info(provider) == nil {
+              // provider written by another client / a future build: kept as-is unless
+              // the user deliberately picks one of the known providers above
+              Text("这张卡是其他类型（\(provider)），原样保留；点选上面任意一项才会改。")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
           }
         }
         Section {
           TextField(placeholder, text: $value)
-            .keyboardType(type == "email" || (isLogin && provider == "apple") ? .emailAddress : type == "phone" ? .phonePad : .asciiCapable)
+            .keyboardType(type == "email" || (isLogin && (provider == "apple" || provider == "google")) ? .emailAddress : type == "phone" ? .phonePad : .asciiCapable)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
-          TextField("标签：主力、小号、工作…", text: $label)
+          if isLogin && provider == "custom" {
+            TextField("平台名称：如 Mastodon、某论坛", text: $label)
+          } else {
+            TextField("标签：主力、小号、工作…", text: $label)
+          }
         } header: { Text(fieldTitle) } footer: {
           if isLogin && provider == "apple" && !trimmed.isEmpty && !valid { Text("Apple ID 是邮箱或手机号。") }
+          if isLogin && provider == "google" && !trimmed.isEmpty && !valid { Text("Google 账号是邮箱地址。") }
+          if isLogin && provider == "custom" { Text("平台名称会存在标签里，卡片显示为「自定义 · 平台名」。") }
         }
         if type == "phone" {
           Section {
@@ -152,7 +177,14 @@ struct IdentityForm: View {
     switch type {
     case "email": return "地址"
     case "phone": return "号码"
-    default: return provider == "apple" ? "Apple ID" : "微信号"
+    default:
+      switch provider {
+      case "apple": return "Apple ID"
+      case "qq": return "QQ 号"
+      case "google": return "Google 账号"
+      case "custom": return "账号"
+      default: return "微信号"
+      }
     }
   }
 
@@ -160,8 +192,8 @@ struct IdentityForm: View {
     let on = provider == p
     return Button { withAnimation(Motion.snappy) { provider = p } } label: {
       HStack(spacing: 6) {
-        LoginGlyph(apple: p == "apple", size: 15, filled: true)
-        Text(name).font(.system(size: 15, weight: .semibold))
+        LoginGlyph(provider: p, size: 15, filled: true)
+        Text(name).font(.system(size: 15, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
       }
       .frame(maxWidth: .infinity).frame(height: 40)
       .foregroundStyle(on ? Color.white : Color.primary)
@@ -366,7 +398,7 @@ struct AccountForm: View {
 struct IdentityToggles: View {
   @Environment(Store.self) var store
   @Binding var selected: [String]
-  var login = false     // true: only 微信 / Apple cards; false: emails and phones
+  var login = false     // true: only login cards (any provider); false: emails and phones
   var body: some View {
     ForEach(login ? store.index.logins : store.data.identities.filter { !$0.isLogin }) { i in
       let on = selected.contains(i.id)
