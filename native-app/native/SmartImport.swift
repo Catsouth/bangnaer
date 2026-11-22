@@ -46,7 +46,7 @@ struct SmartCandidate: Identifiable {
 private struct SmartImportError: Error { let message: String }
 
 /// 示例数据不算数：演示模式下识别与去重都对着空库算，导入时先清示例（与网页版一致）。
-private func smartBase(_ store: Store) -> AtlasData { store.data.demo == true ? AtlasData() : store.data }
+@MainActor private func smartBase(_ store: Store) -> AtlasData { store.data.demo == true ? AtlasData() : store.data }
 
 private func identityKey(_ c: CandIdentity, _ proposed: [ProposedIdentity]) -> String {
   switch c {
