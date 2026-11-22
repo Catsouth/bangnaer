@@ -23,8 +23,9 @@ final class AppLock {
   @ObservationIgnored private var fails = 0
 
   init() {
-    enabled = UserDefaults.standard.string(forKey: "bind.lock.hash") != nil
-    locked = enabled
+    let has = UserDefaults.standard.string(forKey: "bind.lock.hash") != nil
+    enabled = has
+    locked = has
     bioOn = UserDefaults.standard.bool(forKey: "bind.lock.bio")
   }
 
