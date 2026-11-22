@@ -1,5 +1,14 @@
 # 绑哪儿 · 更新记录
 
+## v1.10.2 — 2026-11-23
+- 修搜索点了键盘不弹（v1.10.1 真机实测）：根因是 openSearch 把 input.focus() 放在 setTimeout(…,70) 里——iOS Safari 只认「点按事件同步调用栈里执行的 focus」才升键盘，跨了异步边界就只给蓝色聚焦描边、不给键盘（录屏里用户再点一下输入框才出来正是这个特征）。改为开层动作同一同步栈内直接 focus（带 preventScroll，回退裸 focus），开层动画保留；搜索钮的绑定链核过，是 click 直绑、无 await/防抖挡路。
+- 修星系图还是不居中（v1.10.1 真机实测：核心圆大半出画布左上、气泡贴边）：v1.10.1 的包围盒 fit 数学在桩测模型里是对的，但它把落位结果交给 CSS 的「left/top 50% + 负 margin + transform-origin:center」去合成，真机上这一层的实际合成与桩模型对不上，整群被带偏约半个画布，桩测再全过也测不出来。本版把落位改成 JS 全权锚定：世界层改 left:0/top:0 + transform-origin:0 0，屏幕映射恒为 S(p)=T+p·f，T 与 f 全由 JS 计算下发，不再依赖任何 CSS 居中假设；fit 后再加一道闭环校正——实测核心圆在画布里的真实位置与目标落点比对，偏差超 2px 就把差值补进平移再应用一次，真机上以实测为准兜底。
+- 星系落位三条嫌疑逐条处理：(a) 隐藏预渲染时画布测不到真实尺寸、回退尺寸算出的落位曾被当正式结果锁死——现在回退落位只算 provisional 并标 pending，视图可见/尺寸变化后的渲染按实测尺寸重新 fit；(b) fit 平移曾经过 galaxyClampPan 的 ±45% 拖拽限幅（有被截断落不到位的结构性风险，本次示例数据数值上没咬到）——fit 落位不再走限幅，限幅只管用户拖拽，垂直落点另加「保四边 ≥8px 边距」的回移；(c) 缩放比曾被「只按宽度算」的旧 f 兜底抬高、整群比画布高时上下溢出——新 fit 缩放取宽/高两维容纳值的较小者（各留 8px 边距、封顶 1.25），包围盒完整入画，中心落在水平中线、垂直 56%（空间不够时为保边距回移）。
+- 星系图新增双指捏合缩放：以双指中心为锚点（锚点世界坐标在捏合开始时冻结，缩放全程钉住不漂），范围为 fit 缩放的 0.5–2.5 倍；第二指落下即取消正在进行的单指拖拽，捏合松手不触发惯性、并吞掉紧随的气泡点击，剩余一指不续拖防跳变；缩放/平移跨重渲染保留、切换身份范围时归位。桌面端顺带加了滚轮缩放（以光标为锚点，同一套换算与限幅）。气泡的距离缩放 --bs 随有效缩放实时重算。单指拖拽/惯性/回弹/点击阈值未动。
+- 关页面级缩放：viewport 加 maximum-scale=1、user-scalable=no（viewport-fit=cover 保留）——录屏里整页能被捏合/双击放大成大图的问题关死；这只关页面级缩放，星系画布内的双指缩放是画布自己的 transform，不受影响。顺查全站动画：pageIn/soIn 只有位移+淡入，sheetIn 带 scale(.98) 但只作用于弹窗与「+」菜单（保留）；没有作用在整页视图上的缩放动画。壳侧 WKWebView 本就跟随 viewport meta，无需改 Swift。
+- 关长按系统菜单：body 加 -webkit-touch-callout:none + user-select:none，长按文字不再弹拷贝/查询/翻译菜单、不出选择手柄；input/textarea/[contenteditable] 豁免，保持可编辑可选；自家的长按拖拽排序走 pointer 事件，不受影响（身份卡此前已有同款规则，本次推广到全页）。
+- 如实说明：本版同样没有真机验证条件（构建侧只有 jsdom 桩测 + 等尺寸算术模拟）；星系落位为此专门加了实测闭环校正做保险。测试新增：tests/graph-galaxy.js D 组（390×540 真机量级 fit 断言、隐藏→可见重新 fit、捏合纯逻辑锚点/限幅 + DOM 捏合冒烟）、tests/scroll-shell.js 补 viewport 关缩放与禁长按的规则断言。装好后请在真机复测：点搜索键盘应直接升起、星系首帧应居中入画、双指捏合可缩放星系、整页捏合不动、长按文字不弹菜单。
+
 ## v1.10.1 — 2026-11-23
 - 修壳 App 里页面滑不动（Safari 正常、只有 WKWebView 壳里犯）：根因是旧版整页靠文档（body）滚动撑高——body 只有 min-height:100vh/100dvh、没有内层滚动容器，滚动高度全押在 WKWebView 的文档滚动与 dvh 口径上；壳又是全屏 WebView（.ignoresSafeArea）+ contentInsetAdjustmentBehavior=.never，这套组合下文档滚动不生效，内容比屏幕高也滑不动，底部还被底栏压住。改成标准应用壳高度链：html/body 都 height:100%（百分比只对 WebView 实际帧高）、body 改 flex 纵列 + overflow:hidden，滚动收进 main 内层（flex:1 + min-height:0 + overflow-y:auto），切页回顶改为滚 main。百分比高度链在 Safari 与 WKWebView 里口径一致，网站版表现不回退（页眉本来就常驻、底栏本来就 fixed）。壳代码未动。
 - 修页眉顶进灵动岛：壳全屏后页面从物理屏顶排起，而 header 旧版没有吃安全区（同页的搜索层早就用了 env(safe-area-inset-top)，唯独页眉漏了）。header 顶部内边距改 calc(10px + env(safe-area-inset-top))，Safari 里该值约为 0、无变化，壳里标题自动让到灵动岛下方。

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#060607">
 <title>绑哪儿 · 这个号绑了哪些 App</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -26,7 +26,10 @@ html{color-scheme:dark;height:100%}
    body 改 flex 纵列 + overflow:hidden，滚动收进 main 内层（见 main 规则）。
    旧版靠文档（body）滚动 + min-height:100dvh，在全屏 WKWebView 里文档滚动不生效、内容被截断；
    内层滚动容器在 Safari 与 WKWebView 里行为一致，不回退。 */
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);height:100%;display:flex;flex-direction:column;overflow:hidden;letter-spacing:-.01em;overscroll-behavior-y:none;background:#060607}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);height:100%;display:flex;flex-direction:column;overflow:hidden;letter-spacing:-.01em;overscroll-behavior-y:none;background:#060607;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+/* 长按禁呼出系统选择菜单/禁选文本（v1.10.2）：只禁页面级，输入类元素豁免保持可编辑可选；
+   自家长按拖拽排序走 pointer 事件，不受影响 */
+input,textarea,[contenteditable]{-webkit-touch-callout:default;user-select:text;-webkit-user-select:text}
 /* 氛围光晕：随当前卡主色从顶部大面积晕染、向下渐隐到黑（对齐原版的环境光） */
 #glow{position:fixed;inset:0;pointer-events:none;z-index:0;background:var(--glow);opacity:.5;mix-blend-mode:screen;
   -webkit-mask-image:radial-gradient(130% 68% at 50% -12%,#000 26%,transparent 74%);
@@ -285,7 +288,7 @@ mark{background:rgba(255,214,90,.85);color:#20234a;border-radius:3px;padding:0 1
     radial-gradient(1px 1px at 71% 82%,rgba(255,255,255,.35) 50%,transparent 51%),
     radial-gradient(420px 300px at 50% 0%,rgba(140,150,255,.10),transparent 65%),
     linear-gradient(180deg,#0a0a0c 0%,#070708 55%,#050506 100%)}
-.gworld{position:absolute;left:50%;top:50%;transform-origin:center center;will-change:transform}
+.gworld{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
 .gsvg{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible}
 .gsvg .gl{fill:none;stroke-linecap:round}
 .gsvg .glglow{fill:none;stroke-linecap:round;filter:blur(3px)}
@@ -1071,7 +1074,10 @@ function openSearch(){
   buzz();
   soEl.classList.add("open");
   renderSearchResults();
-  setTimeout(()=>{try{soInput.focus({preventScroll:true})}catch(e){soInput.focus()}},70);
+  /* iOS Safari 硬规则：键盘只认「点按事件同步调用栈内」的 focus；v1.10.0 起 focus 被放在
+     setTimeout(70ms) 里，跨了异步边界，真机只给蓝色聚焦描边、键盘不升（v1.10.1 录屏实证，
+     用户再点一下输入框才出键盘）。这里必须同步 focus，开层动画由 CSS 自己跑，不等它。 */
+  try{soInput.focus({preventScroll:true})}catch(e){soInput.focus()}
 }
 function closeSearch(){
   soEl.classList.remove("open");
@@ -1329,8 +1335,12 @@ document.getElementById("appSort").onchange=e=>{appSort=e.target.value;appShowAl
    线为二次贝塞尔微弧线、按绑定身份着色，线上有 SMIL 粒子流动。 */
 const GALAXY_BUB=44, GALAXY_BUB_ONE=46, GALAXY_STEP=108, GALAXY_CORE=72;
 const GALAXY_DRAG_THRESH=6;   /* 拖动判定阈值（px）：位移小于它算点击 */
-let galaxyPan={x:0,y:0};      /* 蜂窝世界平移（屏幕 px），跨重渲染保留 */
+let galaxyPan={x:0,y:0};      /* 用户拖拽产生的平移偏移（屏幕 px，相对 fit 落位），跨重渲染保留 */
+let galaxyZoom=1;             /* 用户捏合/滚轮缩放（相对 fit 缩放的倍数），跨重渲染保留，切范围时重置为 1 */
 let galaxyFitKey=null;        /* 已按包围盒落位的范围签名（sel+服务集）；签名变了才重算初始落位，拖动后的平移同范围内保留 */
+let galaxyFitSize=null;       /* 上次落位用的画布尺寸（WxH）；尺寸变了（旋转/窗口变化）按新尺寸重算落位 */
+let galaxyFitPending=false;   /* 落位时画布测不到真实尺寸（隐藏预渲染）用的回退尺寸，待可见后按真实尺寸重落 */
+let galaxyFit={scale:0,tx:0,ty:0}; /* 当前范围的 fit 结果：zoom=1 时的缩放与平移（translate），与 galaxyFitKey 同步维护 */
 let galaxySuppressClick=false;/* 拖动刚结束时吞掉紧随的 click */
 let galaxyView=null;          /* 当前画布视图数据（缩放/气泡世界坐标），供平移时实时算距离缩放 */
 function galaxyIdentities(){
@@ -1366,21 +1376,40 @@ function bubLabelDir(dx,dy){
   if(a>=-112.5&&a<-67.5)return "lb-n";
   return "lb-ne";
 }
-/* 星系初始落位（v1.10.1）：按蜂窝群的实际包围盒算，不再按世界几何中心。
+/* 星系初始落位（v1.10.1 按包围盒算；v1.10.2 改为 JS 全权锚定 + 实测闭环，见 galaxyFitPoint/galaxyCorrectFit）：
    世界边长是按「满环最大半径」定的，部分环（只占一侧）或小图时，整群重心会明显偏离世界中心，
-   旧逻辑首帧就偏到角上/上半部。这里把包围盒（核心圆 + 各气泡圆，世界坐标）算出来：
-   水平对画布中线、垂直对画布 56%（略偏下）；包围盒明显小于画布时适度放大，封顶 1.25，且不小于原 f。 */
+   旧逻辑首帧就偏到角上/上半部。这里把包围盒（核心圆 + 各气泡圆，世界坐标）算出来再落位。 */
 function galaxyBBox(cx,cy,slots,bubR){
   let x0=cx-GALAXY_CORE/2,x1=cx+GALAXY_CORE/2,y0=cy-GALAXY_CORE/2,y1=cy+GALAXY_CORE/2;
   slots.forEach(([x,y])=>{x0=Math.min(x0,cx+x-bubR);x1=Math.max(x1,cx+x+bubR);y0=Math.min(y0,cy+y-bubR);y1=Math.max(y1,cy+y+bubR)});
   return {x0,x1,y0,y1,cx:(x0+x1)/2,cy:(y0+y1)/2,w:x1-x0,h:y1-y0};
 }
-function galaxyFitScale(bb,f0,stageW,stageH){
-  const fFit=Math.min((stageW-36)/Math.max(1,bb.w),(stageH-36)/Math.max(1,bb.h));
-  return Math.max(f0,Math.min(fFit,1.25));
+/* 落位缩放：让包围盒完整落进画布（四边各留 8px），宽、高两维都算、取小的一边，封顶 1.25、下限 0.15。
+   v1.10.2 修（嫌疑 c）：旧版以「只按画布宽 + 620 高上限」算出的 f0 兜底抬高（Math.max(f0,…)），
+   整群比画布高时会被 f0 撑得上下溢出；现在只认包围盒对真实画布尺寸的容纳缩放。 */
+function galaxyFitScale(bb,stageW,stageH){
+  const fFit=Math.min((stageW-16)/Math.max(1,bb.w),(stageH-16)/Math.max(1,bb.h));
+  return Math.max(0.15,Math.min(fFit,1.25));
 }
-function galaxyFitPan(bb,cx,cy,f,stageH){
-  return {x:-((bb.cx-cx)*f),y:stageH*0.06-((bb.cy-cy)*f)};
+/* 落位平移：世界层以 left:0/top:0 + transform-origin:0 0 锚定，屏幕映射 S(p)=T+p*f（T 为 translate）。
+   让包围盒中心落在画布水平中线、垂直 56%（略偏下）：T = (stageW/2 - bb.cx*f, stageH*0.56 - bb.cy*f)。
+   v1.10.2 修：落位结果不再经过 galaxyClampPan 的拖拽限幅（嫌疑 b）——限幅只管用户拖拽，
+   fit 平移被 ±45% 截断会直接落不到位。 */
+function galaxyFitPoint(bb,f,stageW,stageH){
+  const tx=stageW/2-bb.cx*f;
+  let ty=stageH*0.56-bb.cy*f;
+  /* 垂直 56% 是首选落点；整群缩放后接近画布高时，优先保住上下 ≥8px 边距、把落点相应回移 */
+  ty=Math.max(8-bb.y0*f,Math.min(stageH-8-bb.y1*f,ty));
+  return {x:tx,y:ty};
+}
+/* 捏合/滚轮缩放（v1.10.2）：纯换算。锚点下的世界点 (wx,wy) 在缩放前后钉在同一屏幕位置：
+   手势开始时缩放 f0、锚点当前屏幕位 (cx,cy)，累计比例 ratio → 新缩放 f（限幅在 fit 缩放的
+   [GALAXY_ZOOM_MIN, GALAXY_ZOOM_MAX] 倍，即相对 fit 的 0.5–2.5 倍：fit 时整群刚好入画，
+   缩小一半看全景、放大 2.5 倍看细节，再多只会糊或迷路），新平移 T=(cx-wx*f, cy-wy*f)。 */
+const GALAXY_ZOOM_MIN=0.5,GALAXY_ZOOM_MAX=2.5;
+function galaxyPinchFrame(fitF,f0,wx,wy,ratio,cx,cy){
+  const f=Math.max(fitF*GALAXY_ZOOM_MIN,Math.min(fitF*GALAXY_ZOOM_MAX,f0*ratio));
+  return {f,tx:cx-wx*f,ty:cy-wy*f};
 }
 /* Apple Watch 蜂窝式距离缩放：越靠画布中心越大（1.05），越往边缘越小（0.55） */
 function galaxyDistScale(d){
@@ -1391,19 +1420,44 @@ function galaxyClampPan(x,y){
   const mx=galaxyView?galaxyView.stageW*0.45:160,my=galaxyView?galaxyView.stageH*0.45:160;
   return {x:Math.max(-mx,Math.min(mx,x)),y:Math.max(-my,Math.min(my,y))};
 }
-/* 应用平移：世界层整体 translate+scale，气泡按与画布中心的实时距离更新 --bs（只改 transform/CSS 变量，不重排） */
+/* 应用视图：世界层 transform = translate(fit 平移 + 用户平移) scale(有效缩放)，全部由 JS 计算——
+   世界层已改锚定 left:0/top:0 + transform-origin:0 0，屏幕映射恒为 S(p)=T+p*f，不再依赖 CSS 的
+   「left/top 50% + 负 margin」居中（v1.10.1 真机上整群被带偏约半个画布，与桩模型对不上，见 CHANGELOG）。
+   气泡距离缩放 --bs 按气泡屏幕坐标到画布中心的距离算（只改 transform/CSS 变量，不重排）。 */
 function galaxyApplyPan(){
   const v=galaxyView;if(!v||!v.world)return;
-  v.world.style.transform=`translate(${galaxyPan.x.toFixed(1)}px,${galaxyPan.y.toFixed(1)}px) scale(${v.f})`;
+  const tx=v.baseT.x+galaxyPan.x,ty=v.baseT.y+galaxyPan.y;
+  v.world.style.transform=`translate(${tx.toFixed(1)}px,${ty.toFixed(1)}px) scale(${v.f})`;
   const scx=v.stageW/2,scy=v.stageH/2;
   v.bubs.forEach(b=>{
-    const sx=scx+(b.x-v.cx)*v.f+galaxyPan.x,sy=scy+(b.y-v.cy)*v.f+galaxyPan.y;
+    const sx=tx+b.x*v.f,sy=ty+b.y*v.f;
     b.el.style.setProperty("--bs",galaxyDistScale(Math.hypot(sx-scx,sy-scy)).toFixed(3));
   });
 }
-/* 画布拖动：跟手平移 + 松手惯性滑动 + 越界回弹；位移 < GALAXY_DRAG_THRESH 视为点击 */
+/* 落位闭环校正（v1.10.2）：fit 应用后实测核心圆中心与目标落点的偏差，超 2px 就把差值补进 fit 平移再应用一次。
+   桩环境（jsdom）getBoundingClientRect 全 0，测不到就跳过、不影响桩测；真机上无论布局口径怎么偏，
+   都以实测为准把核心拉回目标位——这是继 v1.10.1「桩里全过、真机带偏」之后加的保险。 */
+function galaxyCorrectFit(st){
+  const v=galaxyView;if(!v||!v.world)return;
+  const core=v.world.querySelector(".gcore");if(!core)return;
+  const sr=st.getBoundingClientRect(),cr=core.getBoundingClientRect();
+  if(!(sr.width>0&&sr.height>0&&cr.width>0&&cr.height>0))return;
+  const ex=v.baseT.x+galaxyPan.x+v.cx*v.f,ey=v.baseT.y+galaxyPan.y+v.cy*v.f;
+  const ax=cr.left-sr.left+cr.width/2,ay=cr.top-sr.top+cr.height/2;
+  const dx=ex-ax,dy=ey-ay;
+  if(Math.abs(dx)>2||Math.abs(dy)>2){
+    v.baseT.x+=dx;v.baseT.y+=dy;galaxyFit.tx=v.baseT.x;galaxyFit.ty=v.baseT.y;
+    galaxyApplyPan();
+  }
+}
+/* 画布手势：单指拖拽平移 + 松手惯性滑动 + 越界回弹（位移 < GALAXY_DRAG_THRESH 视为点击）；
+   双指捏合缩放（v1.10.2）：第二指落下即取消正在进行的单指拖拽，以双指中心为锚点缩放，
+   锚点世界坐标在捏合开始时冻结、之后每帧按当前双指中心与间距走 galaxyPinchFrame 换算；
+   捏合松手不触发惯性、并吞掉紧随的点击（galaxySuppressClick）；剩余一指不续拖，防跳变。
+   桌面滚轮缩放以光标为锚点（同一套换算）。画布有 touch-action:none，指针事件不被浏览器手势抢走。 */
 function galaxyAttachDrag(st){
-  let drag=null,raf=0,anim=0,vel={x:0,y:0},frames=0;
+  const pointers=new Map();   /* pointerId -> {x,y} 画布坐标，最多记两指 */
+  let drag=null,pinch=null,raf=0,anim=0,vel={x:0,y:0},frames=0;
   const stopAnim=()=>{if(anim)cancelAnimationFrame(anim);anim=0};
   const loop=()=>{
     anim=0;frames++;
@@ -1415,13 +1469,38 @@ function galaxyAttachDrag(st){
     const c2=galaxyClampPan(nx,ny);
     if(frames<300&&(Math.abs(vel.x)>0.15||Math.abs(vel.y)>0.15||nx!==c2.x||ny!==c2.y))anim=requestAnimationFrame(loop);
   };
+  const stagePos=e=>{const r=st.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
+  const applyPinch=()=>{
+    const v=galaxyView;if(!v||!pinch||pointers.size<2)return;
+    const ps=[...pointers.values()];
+    const c={x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2};
+    const d=Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y);
+    const res=galaxyPinchFrame(v.fFit,pinch.f0,pinch.wx,pinch.wy,pinch.d0>0?d/pinch.d0:1,c.x,c.y);
+    v.f=res.f;galaxyZoom=v.fFit>0?v.f/v.fFit:1;
+    galaxyPan={x:res.tx-v.baseT.x,y:res.ty-v.baseT.y};
+    galaxyApplyPan();
+  };
   st.addEventListener("pointerdown",e=>{
     stopAnim();frames=0;
-    drag={id:e.pointerId,sx:e.clientX,sy:e.clientY,px:galaxyPan.x,py:galaxyPan.y,moved:false,lx:e.clientX,ly:e.clientY,lt:performance.now()};
-    vel={x:0,y:0};
+    if(pointers.size>=2)return;
+    pointers.set(e.pointerId,stagePos(e));
     try{st.setPointerCapture(e.pointerId)}catch(_){}
+    if(pointers.size===2){
+      /* 第二指落下：捏合成立，单指拖拽立即作废（不清 suppress，捏合全程吞点击） */
+      drag=null;vel={x:0,y:0};galaxySuppressClick=true;st.classList.remove("grabbing");
+      const v=galaxyView;const ps=[...pointers.values()];
+      const c={x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2};
+      const tx=v.baseT.x+galaxyPan.x,ty=v.baseT.y+galaxyPan.y;
+      pinch={d0:Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y),f0:v.f,wx:(c.x-tx)/v.f,wy:(c.y-ty)/v.f};
+      const gh=st.querySelector(".ghint");if(gh)gh.style.opacity="0";
+    }else{
+      drag={id:e.pointerId,sx:e.clientX,sy:e.clientY,px:galaxyPan.x,py:galaxyPan.y,moved:false,lx:e.clientX,ly:e.clientY,lt:performance.now()};
+      vel={x:0,y:0};
+    }
   });
   st.addEventListener("pointermove",e=>{
+    if(pointers.has(e.pointerId))pointers.set(e.pointerId,stagePos(e));
+    if(pinch){applyPinch();return}
     if(!drag||e.pointerId!==drag.id)return;
     const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
     if(!drag.moved&&Math.hypot(dx,dy)<GALAXY_DRAG_THRESH)return;
@@ -1435,12 +1514,30 @@ function galaxyAttachDrag(st){
     if(!raf)raf=requestAnimationFrame(()=>{raf=0;galaxyApplyPan()});
   });
   const end=e=>{
+    pointers.delete(e.pointerId);
+    if(pinch){
+      /* 捏合结束：不启惯性；pinch 标记保留到两指全松开（防剩余一指被误当新拖拽），
+         全松开后按老规矩把 suppress 再维持 90ms 吞掉紧随的点击 */
+      if(pointers.size===0){pinch=null;galaxySuppressClick=true;setTimeout(()=>{galaxySuppressClick=false},90)}
+      return;
+    }
     if(!drag||e.pointerId!==drag.id)return;
     const wasDrag=drag.moved;drag=null;st.classList.remove("grabbing");
     if(wasDrag){galaxySuppressClick=true;setTimeout(()=>{galaxySuppressClick=false},90);frames=0;anim=requestAnimationFrame(loop)}
   };
   st.addEventListener("pointerup",end);
   st.addEventListener("pointercancel",end);
+  /* 滚轮缩放（桌面顺手）：以光标为锚点，与捏合同一套 galaxyPinchFrame 换算与限幅 */
+  st.addEventListener("wheel",e=>{
+    const v=galaxyView;if(!v||!(v.fFit>0))return;
+    e.preventDefault();
+    const p=stagePos(e);
+    const tx=v.baseT.x+galaxyPan.x,ty=v.baseT.y+galaxyPan.y;
+    const res=galaxyPinchFrame(v.fFit,v.f,(p.x-tx)/v.f,(p.y-ty)/v.f,Math.exp(-e.deltaY*0.002),p.x,p.y);
+    v.f=res.f;galaxyZoom=v.f/v.fFit;
+    galaxyPan={x:res.tx-v.baseT.x,y:res.ty-v.baseT.y};
+    galaxyApplyPan();
+  },{passive:false});
 }
 function renderGraph(){
   const box=document.getElementById("graphBox");
@@ -1471,12 +1568,11 @@ function renderGraph(){
   const f=Math.min(1,stageW/worldW,620/worldH);
   const stageH=Math.max(320,Math.round(worldH*f));
   const cx=worldW/2,cy=worldH/2;
-  /* 初始落位按实际包围盒算（v1.10.1）：部分环只占一侧时整群重心不在世界中心，必须平移校正 */
+  /* 初始落位按实际包围盒算（v1.10.1 起）：部分环只占一侧时整群重心不在世界中心，必须平移校正；
+     落位在插入 DOM 后按实测画布尺寸执行（见下方落位段），这里只备好包围盒 */
   const bubD=galaxySel==="all"?GALAXY_BUB:GALAXY_BUB_ONE;
   const bb=galaxyBBox(cx,cy,slots,bubD/2);
-  const fUse=galaxyFitScale(bb,f,stageW,stageH);
   const fitKey=galaxySel+"|"+svcs.map(([k])=>k).join(",");
-  const needFit=fitKey!==galaxyFitKey;
   const RM=!!(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   /* 连线（按绑定着色）：模糊光晕打底 + 亮色主线；每线一条流光（发光头点 + 2 个递减尾点拖尾），共 3 个粒子/线，总数 ≤ 绑定数×3 */
   let lines="",parts="";
@@ -1519,7 +1615,7 @@ function renderGraph(){
   }
   box.innerHTML=`<div class="galaxy"><div class="gchips">${chipsHtml}</div>`+
     (svcs.length>40&&galaxySel==="all"?`<p class="hint" style="margin:0 0 10px">🌌 服务有点多（${svcs.length} 个），全挤在一个星系里会糊。点上方某个身份，先看它自己的星系更清楚；画布可以按住拖动。</p>`:"")+
-    `<div class="gstage" id="gstage" style="height:${stageH}px"><span class="ghint" id="gHint">按住拖动 · 点气泡看详情</span><div class="gworld" style="--bub:${bubD}px;width:${worldW}px;height:${worldH}px;margin-left:${-worldW/2}px;margin-top:${-worldH/2}px;transform:scale(${fUse.toFixed(3)})">`+
+    `<div class="gstage" id="gstage" style="height:${stageH}px"><span class="ghint" id="gHint">按住拖动 · 双指捏合缩放 · 点气泡看详情</span><div class="gworld" style="--bub:${bubD}px;width:${worldW}px;height:${worldH}px;transform:scale(${f.toFixed(3)})">`+
     `<svg class="gsvg" viewBox="0 0 ${worldW} ${worldH}" aria-hidden="true">${lines}${parts}</svg>${coreHtml}${bubHtml}`+
     (svcs.length?"":`<div class="gempty">这个身份暂时没有在用的服务（已注销的不出现在星系里）</div>`)+
     `</div></div>${infoHtml}</div>`;
@@ -1528,13 +1624,27 @@ function renderGraph(){
   const st=document.getElementById("gstage");
   if(st){
     st.onclick=e=>{if(galaxySuppressClick)return;if(galaxyHi&&(e.target===st||e.target.classList.contains("gworld")||e.target.classList.contains("gsvg"))){galaxyHi=null;render()}};
-    /* 蜂窝平移视图：登记世界层与气泡坐标，应用当前平移并挂拖动 */
-    galaxyView={world:st.querySelector(".gworld"),f:fUse,cx,cy,stageW:st.clientWidth||stageW,stageH:st.clientHeight||stageH,
+    /* 落位尺寸在插入后实测画布：测不到真实尺寸（页面隐藏时预渲染、桩环境）就用回退值 provisional 落位并标 pending，
+       等视图可见后的渲染（切页/尺寸变化都会再触发 render）按真实尺寸重落——v1.10.1 的教训之一（嫌疑 a）：
+       回退尺寸下算出的落位曾被当正式结果锁死，切到真页面后全错。 */
+    const stW=st.clientWidth,stH=st.clientHeight,measurable=stW>0&&stH>0;
+    const fitW=measurable?stW:stageW,fitH=measurable?stH:stageH;
+    const sizeKey=fitW+"x"+fitH;
+    const needFit=fitKey!==galaxyFitKey||sizeKey!==galaxyFitSize||(measurable&&galaxyFitPending);
+    if(needFit){
+      const sameScope=fitKey===galaxyFitKey;
+      galaxyFitKey=fitKey;galaxyFitSize=sizeKey;galaxyFitPending=!measurable;
+      galaxyFit.scale=galaxyFitScale(bb,fitW,fitH);
+      const pt=galaxyFitPoint(bb,galaxyFit.scale,fitW,fitH);
+      galaxyFit.tx=pt.x;galaxyFit.ty=pt.y;
+      if(!sameScope){galaxyZoom=1;galaxyPan={x:0,y:0}}   /* 换范围：缩放/平移归位；仅尺寸变化时保留用户的缩放与平移 */
+    }
+    /* 蜂窝视图：登记世界层、fit 结果与气泡世界坐标，应用当前视图并挂手势。
+       fit 平移在此直接生效，不再过 galaxyClampPan——那是拖拽限幅，会把落位平移截断（嫌疑 b）。 */
+    galaxyView={world:st.querySelector(".gworld"),fFit:galaxyFit.scale,f:galaxyFit.scale*galaxyZoom,baseT:{x:galaxyFit.tx,y:galaxyFit.ty},cx,cy,stageW:fitW,stageH:fitH,
       bubs:[...st.querySelectorAll("[data-gbub]")].map(el=>{const p=pos.get(el.dataset.gbub);return{el,x:cx+p[0],y:cy+p[1]}})};
-    /* 首次渲染该范围、或切换身份 chips 后：按包围盒重新落位（居中、略偏下）；同范围内重渲染保留用户拖动后的平移 */
-    if(needFit){galaxyFitKey=fitKey;galaxyPan=galaxyFitPan(bb,cx,cy,fUse,galaxyView.stageH)}
-    galaxyPan=galaxyClampPan(galaxyPan.x,galaxyPan.y);
     galaxyApplyPan();
+    if(needFit&&measurable)galaxyCorrectFit(st);
     galaxyAttachDrag(st);
   }
   bindSvcRows(box);

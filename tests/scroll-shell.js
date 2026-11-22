@@ -5,6 +5,7 @@
    - body 是 flex 纵列 + overflow:hidden；main 是 flex:1 + min-height:0 + overflow-y:auto 的内层滚动容器
    - header 顶部内边距吃 env(safe-area-inset-top)，不再顶进灵动岛
    - switchView 切页滚的是 main，不是 window
+   - v1.10.2 追加：viewport 关页面级缩放（maximum-scale=1 + user-scalable=no）；body 禁长按呼出/禁选文本，输入类元素豁免
    - jsdom 计算样式冒烟：main/body 的关键计算值真的生效（不是只写在源码里） */
 const fs = require("fs");
 const path = require("path");
@@ -22,12 +23,19 @@ const rule = sel => { const m = html.match(new RegExp("(?:^|\\n)" + sel + "\\{([
 
 /* ---------- 源码规则链 ---------- */
 ok("viewport 带 viewport-fit=cover", /<meta name="viewport"[^>]*viewport-fit=cover/.test(html));
+ok("viewport 关页面级缩放（maximum-scale=1 + user-scalable=no，v1.10.2：防整页被捏合/双击放大；星系画布内缩放是独立 transform 不受影响）",
+  /<meta name="viewport"[^>]*maximum-scale=1/.test(html) && /<meta name="viewport"[^>]*user-scalable=no/.test(html));
 ok("html 高度 100%（百分比链起点）", /height:\s*100%/.test(rule("html")));
 const bodyCss = rule("body");
 ok("body 高度 100% + flex 纵列 + overflow:hidden",
   /height:\s*100%/.test(bodyCss) && /display:\s*flex/.test(bodyCss) && /flex-direction:\s*column/.test(bodyCss) && /overflow:\s*hidden/.test(bodyCss), bodyCss.slice(0, 80));
 ok("body 不再靠 min-height:100vh/100dvh 撑高（壳内文档滚动失效的旧口径）",
   !/min-height:\s*100d?vh/.test(bodyCss));
+ok("body 禁长按呼出系统菜单 + 禁选文本（-webkit-touch-callout:none + user-select:none，v1.10.2）",
+  /-webkit-touch-callout:\s*none/.test(bodyCss) && /user-select:\s*none/.test(bodyCss));
+const inputCss = rule("input,textarea,\\[contenteditable\\]");
+ok("输入类元素豁免禁选（input/textarea/[contenteditable] 恢复 user-select:text 可编辑可选）",
+  /user-select:\s*text/.test(inputCss) && /-webkit-touch-callout:\s*default/.test(inputCss), inputCss);
 const mainCss = rule("main");
 ok("main 是内层滚动容器（flex:1 + min-height:0 + overflow-y:auto）",
   /flex:\s*1/.test(mainCss) && /min-height:\s*0/.test(mainCss) && /overflow-y:\s*auto/.test(mainCss), mainCss.slice(0, 80));
