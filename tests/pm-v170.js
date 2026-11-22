@@ -22,6 +22,7 @@ function makeDom(seed = {}) {
     beforeParse(window) {
       if (seed.ua) { try { Object.defineProperty(window.navigator, "userAgent", { configurable: true, get: () => seed.ua }); } catch (e) {} }
       window.fetch = (url, opts = {}) => { fetchCalls.push({ url: String(url), method: opts.method || "GET" }); return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(seed.remote ? JSON.stringify(seed.remote) : "{}") }); };
+      window.HTMLElement.prototype.scrollTo = () => {}; /* jsdom 缺 Element.scrollTo：v1.10.3 起确认框改 async，handler 里的 switchView 抛错会变未处理 rejection 打崩进程，桩掉 */
       window.URL.createObjectURL = () => "blob:stub";
       if (seed.ls) for (const k in seed.ls) window.localStorage.setItem(k, seed.ls[k]);
     }
@@ -80,6 +81,7 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
     const db = { identities: [ID("me@example.com", "email", "a1"), ID("13800138000", "phone", "a2")], links: [LK("a1", "GitHub", "github.com")], updatedAt: 5 };
     const { win, doc } = makeDom({ ls: { "atlas-db": JSON.stringify(db) } });
     win.confirm = () => true;
+    win.appConfirm = async m => win.confirm(m);
     await sleep(60);
     win.eval("openIdDetail('a1')");
     doc.getElementById("btnIdDelete").click(); await sleep(30);
@@ -101,6 +103,7 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
     const { win, doc } = makeDom({ ls: { "atlas-db": JSON.stringify(db) } });
     let confirmMsg = "";
     win.confirm = m => { confirmMsg = m; return false; };
+    win.appConfirm = async m => win.confirm(m);
     await sleep(60);
     doc.getElementById("idType").value = "email";
     doc.getElementById("idValue").value = "me@example.com";
@@ -155,6 +158,7 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
     const db = { identities: [ID("me@example.com", "email", "a1")], links, updatedAt: 5 };
     const { win, doc } = makeDom({ ls: { "atlas-db": JSON.stringify(db) } });
     win.confirm = () => true;
+    win.appConfirm = async m => win.confirm(m);
     await sleep(60);
     doc.querySelectorAll(".tabbtn")[1].click(); await sleep(30);
     doc.querySelector('[data-h="nomethod"]').click(); await sleep(30);
@@ -279,6 +283,7 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
     const db = { identities: [ID("old@x.com", "email", "o1")], links: [], updatedAt: 5 };
     const { win, doc } = makeDom({ ls: { "atlas-db": JSON.stringify(db) } });
     win.confirm = () => true;
+    win.appConfirm = async m => win.confirm(m);
     await sleep(60);
     ok("设置页有导入备份恢复行", !!doc.getElementById("btnRestore"));
     const backup = { identities: [ID("new@x.com", "email", "n1"), ID("13900139000", "phone", "n2")], links: [LK("n1", "GitHub", "github.com")], updatedAt: 777 };
@@ -295,6 +300,7 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
   {
     const { win, doc } = makeDom();
     let msg = ""; win.confirm = m => { msg = m; return false; };
+    win.appConfirm = async m => win.confirm(m);
     await sleep(60);
     doc.getElementById("btnExport").click(); await sleep(10);
     ok("首次导出弹明文提醒", msg.includes("明文") && msg.includes("不含密码"), msg.slice(0, 30));

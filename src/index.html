@@ -153,7 +153,7 @@ mark{background:rgba(255,214,90,.85);color:#20234a;border-radius:3px;padding:0 1
 .svc.cancelled{opacity:.52}.svc.cancelled .nm{text-decoration:line-through}
 .svc-ico{position:relative;width:48px;height:48px;border-radius:14px;flex:none;overflow:hidden;background:linear-gradient(135deg,#3a4390,#6c5ce7);display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 4px 10px rgba(0,0,0,.35)}
 .svc-ico::before{content:attr(data-letter);font-size:19px;font-weight:800;color:#fff;text-transform:uppercase}
-.svc-ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff;padding:5px}
+.svc-ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff;padding:5px;-webkit-user-drag:none;user-select:none;-webkit-user-select:none}
 .svc .nm{font-weight:700;font-size:15px}
 .svc .meta{color:var(--muted);font-size:12px;margin-top:2px;word-break:break-all;line-height:1.5}
 .svc .sp{flex:1}
@@ -165,6 +165,24 @@ mark{background:rgba(255,214,90,.85);color:#20234a;border-radius:3px;padding:0 1
 .tag.cancelled{color:#ffd3da;border-color:rgba(255,107,129,.55)}
 .svc-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
 .svc-main{min-width:0}
+/* ---------- 服务行左滑露出（v1.10.3）：行内容左移，右侧露出圆钮（··· 更多 / 删除） ----------
+   .svcwrap  clip 住露出层；.svc 本体盖在上面横滑。纵向滚动保持原生（touch-action:pan-y），
+   横向位移过阈值且横向占优时才由手势接管，不抢页面滚动/下拉。 */
+.svcwrap{position:relative;overflow:hidden;border-radius:var(--radius);margin-bottom:10px}
+.svcwrap .svc{margin-bottom:0;position:relative;z-index:1;touch-action:pan-y}
+.svcwrap .svc.swiping{transition:none}
+.svcreveal{position:absolute;top:0;right:0;bottom:0;z-index:0;display:flex;align-items:center;gap:14px;padding:0 16px 0 8px;background:#101013}
+.svcact{display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:none;box-shadow:none;padding:0;min-height:0;color:var(--muted2);font-size:11px;-webkit-backdrop-filter:none;backdrop-filter:none}
+.svcact .circ{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:800;color:#fff;line-height:1}
+.svcact.more .circ{background:#3d6db5}
+.svcact.del .circ{background:#e5484d}
+.svcact:active .circ{transform:scale(.93)}
+.svcact svg{width:24px;height:24px;fill:#fff}
+/* ··· 更多菜单（全局一份，fixed 定位到钮旁） */
+#svcMenu{position:fixed;z-index:120;min-width:168px;background:rgba(26,26,31,.97);border:1px solid rgba(255,255,255,.13);border-radius:16px;box-shadow:0 24px 50px rgba(0,0,0,.6);padding:5px;display:none}
+#svcMenu.open{display:block;animation:sheetIn .25s var(--spring) both}
+#svcMenu button{display:flex;align-items:center;width:100%;text-align:left;background:transparent;border:none;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;border-radius:11px;padding:11px 12px;font-size:14px;font-weight:600;min-height:44px;color:var(--text)}
+#svcMenu button:active{background:rgba(255,255,255,.12)}
 .cathead{font-size:16.5px;font-weight:800;color:#fff;margin:20px 0 10px;display:flex;align-items:baseline;gap:7px}
 .cathead .n{color:var(--muted);font-weight:600;font-size:13px}
 /* ---------- 最近添加 ---------- */
@@ -762,6 +780,19 @@ dialog::backdrop{background:rgba(0,0,0,.55);backdrop-filter:blur(7px) saturate(1
   <div class="row"><button onclick="document.getElementById('dlgHelp').close()">关闭</button></div>
 </dialog>
 
+<!-- 应用内确认框（v1.10.3）：替代原生 confirm()——IPA 壳的 WKUIDelegate 没实现 JS 确认面板，
+     原生 confirm() 在壳里恒返回 false，所有带确认的操作（清除示例/删除/清空等）都会被静默拦死 -->
+<dialog id="dlgConfirm">
+  <p id="confirmMsg" style="font-size:15px;line-height:1.65;margin:2px 0 18px;white-space:pre-line"></p>
+  <div class="row">
+    <button class="primary" id="btnConfirmOk" type="button">确定</button>
+    <button id="btnConfirmCancel" type="button">取消</button>
+  </div>
+</dialog>
+
+<!-- 服务行「···」更多菜单（全局一份） -->
+<div id="svcMenu" role="menu"></div>
+
 <input type="file" id="fileRestore" accept=".json,application/json" style="display:none">
 
 <div id="undoBar" role="alert"><span id="undoMsg"></span><button id="undoBtn" type="button">撤销</button></div>
@@ -868,7 +899,7 @@ function renderDemoBanner(){
   if(!isDemo()){b.innerHTML="";return}
   b.innerHTML=`<div class="demobanner"><span>👀 当前是<b>示例数据</b>，不是你的真实账号，随便点、随便改都不会备份。</span><span style="flex:1"></span><button id="btnClearDemo" type="button">清除示例，开始录入我的</button></div>`;
   const btn=b.querySelector("#btnClearDemo");
-  if(btn)btn.onclick=()=>{if(!confirm("清除全部示例数据？清完回到一张白纸，开始录入你自己的账号。"))return;clearDemoData();toast("示例已清除，开始录入你的账号吧")};
+  if(btn)btn.onclick=async()=>{if(!(await appConfirm("清除全部示例数据？清完回到一张白纸，开始录入你自己的账号。")))return;clearDemoData();toast("示例已清除，开始录入你的账号吧")};
 }
 function bindEmptyActions(container,prefix){
   const bd=container.querySelector("#btnDemoStart"+prefix);if(bd)bd.onclick=loadDemo;
@@ -883,7 +914,7 @@ function mask(v){if(!privacy)return esc(v);return esc(v.replace(/^(.).*(@.*)$/,"
 function svcOf(link){if(!link.domain)return{name:link.name||"自定义应用",domain:"",cat:"其它"};return CATALOG.find(s=>s.domain===link.domain)||{name:link.name||link.domain,domain:link.domain,cat:"其它"}}
 function svcKey(l){return (l.domain||"")+"|"+(l.name||"")}
 function iconUrl(d){return "https://www.google.com/s2/favicons?domain="+encodeURIComponent(d)+"&sz=64"}
-function icoHtml(s,cls){return `<span class="svc-ico ${cls||""}" data-letter="${esc((s.name||"?").trim().charAt(0)||"?")}">${s.domain?`<img src="${iconUrl(s.domain)}" alt="" loading="lazy" onerror="this.remove()">`:""}</span>`}
+function icoHtml(s,cls){return `<span class="svc-ico ${cls||""}" data-letter="${esc((s.name||"?").trim().charAt(0)||"?")}">${s.domain?`<img src="${iconUrl(s.domain)}" alt="" loading="lazy" draggable="false" onerror="this.remove()">`:""}</span>`}
 /* 登录方式：旧数据没有 method 时按「密码登录」，不报错 */
 const METHODS=["密码登录","Google 授权","Apple 授权","微信授权","QQ 授权","手机号验证码","其它"];
 function methodOf(link){return METHODS.includes(link&&link.method)?link.method:"密码登录"}
@@ -951,6 +982,27 @@ function hlName(name){
 /* ---------- toast + 复制 ---------- */
 let toastTimer=null;
 function toast(msg,ms){const el=document.getElementById("toast");if(!el)return;el.textContent=msg;el.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),ms||1800)}
+/* 应用内确认（v1.10.3）：原生 confirm() 在 IPA 壳里恒 false（壳未实现 WKUIDelegate 的 JS 面板方法），
+   凡是「先确认再执行」的入口在壳里全被静默拦死（清除示例点了没反应就是它）。统一改走页内对话框，
+   返回 Promise<boolean>；浏览器里行为与原生确认一致。 */
+let confirmRes=null;
+function appConfirm(msg){
+  return new Promise(res=>{
+    const dlg=document.getElementById("dlgConfirm");
+    if(!dlg){res(true);return}
+    document.getElementById("confirmMsg").textContent=msg;
+    if(confirmRes)confirmRes(false); /* 上一个还没答就被新的顶掉：按取消处理 */
+    confirmRes=res;
+    try{if(!dlg.open)dlg.showModal()}
+    catch(e){ /* 极旧环境 dialog 打不开：退回原生 confirm（壳里它恒 false，即拦下操作，属安全失败） */
+      confirmRes=null;let v=false;try{v=!!window.confirm(msg)}catch(e2){}res(v);
+    }
+  });
+}
+function settleConfirm(v){const r=confirmRes;confirmRes=null;const dlg=document.getElementById("dlgConfirm");try{if(dlg&&dlg.open)dlg.close()}catch(e){}if(r)r(v)}
+document.getElementById("btnConfirmOk").onclick=()=>settleConfirm(true);
+document.getElementById("btnConfirmCancel").onclick=()=>settleConfirm(false);
+document.getElementById("dlgConfirm").addEventListener("close",()=>{if(confirmRes)settleConfirm(false)});
 /* ---------- 删除撤销：删前存快照，底部出 6 秒撤销条 ---------- */
 let undoTimer=null;
 function snapshotUndo(label){
@@ -1098,11 +1150,11 @@ function renderSearchResults(){
   bindSvcRows(soResults);
   /* 在搜索层里删掉服务后，底层 save() 只重渲原页面，这里补刷一次结果，别留旧行 */
   soResults.querySelectorAll("[data-del]").forEach(b=>{const orig=b.onclick;b.onclick=()=>{if(orig)orig();renderSearchResults()}});
-  /* 整行可点开详情：点到行内按钮（前往登录/复制等）时不触发开详情 */
+  /* 整行可点开详情：点到行内按钮（删除/更多等）时不触发开详情；行处于左滑露出态时由左滑层吞点击收起 */
   soResults.querySelectorAll(".svc").forEach(row=>row.addEventListener("click",e=>{
     if(e.target.closest("button"))return;
-    const eb=row.querySelector("[data-edit]");if(!eb)return;
-    closeSearch();eb.click();
+    const id=row.dataset.svcrow;if(!id)return;
+    closeSearch();openSvcEdit(id);
   }));
 }
 if(soInput){
@@ -1169,7 +1221,7 @@ function renderWallet(){
     box.innerHTML=`<div class="glasspanel"><div class="gridpanel">${links.map(l=>{const s=svcOf(l);const st=statusOf(l);
       return `<div class="gcell ${st}" data-edit="${l.id}">${icoHtml(s)}<div class="gn">${esc(s.name)}</div><div class="gm">${st!=="active"?STATUS[st]:esc(methodOf(l))}</div></div>`}).join("")}
       <div class="gcell add" id="tileAdd"><span class="plus">＋</span><div class="gn">添加</div></div></div></div>`;
-    box.querySelectorAll("[data-edit]").forEach(t=>t.onclick=()=>openSvcEdit(t.dataset.edit));
+    box.querySelectorAll("[data-edit]").forEach(t=>{t.onclick=()=>openSvcEdit(t.dataset.edit);attachSvcLongPress(t,t.dataset.edit)});
     const add=document.getElementById("tileAdd");if(add)add.onclick=()=>openAddSvc(selId);
   }else{
     box.innerHTML=(links.length?links.map(l=>svcRowHtml(l,true)).join(""):'<div class="empty">这里还空着。自动识别导入一次，胜过手打一百次。</div>')+
@@ -1188,24 +1240,113 @@ function renderWallet(){
   }).join("")
     :'<div class="empty">还没有添加过服务。</div>';
   const rb=document.getElementById("recentBox");
-  rb.querySelectorAll("[data-edit]").forEach(c=>c.onclick=()=>openSvcEdit(c.dataset.edit));
+  rb.querySelectorAll("[data-edit]").forEach(c=>{c.onclick=()=>openSvcEdit(c.dataset.edit);attachSvcLongPress(c,c.dataset.edit)});
 }
 /* 服务行（列表视图 / 全部 App 页共用） */
+const SVC_TRASH_SVG='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1.1 12H7.1L6 9zm4 2v8h1.7v-8H10zm3.3 0v8H15v-8h-1.7z"/></svg>';
+/* 服务行（v1.10.3 左滑版）：常显只剩登录方式胶囊（金色「密码登录」为主按钮位）；
+   行身左滑露出右侧圆钮（··· 更多 / 删除），其余动作收进 ··· 菜单；长按行身/网格/最近行也能弹同一菜单（带删除）。
+   动作实现收敛到 svcGoto/svcCopyAcc/svcCopyId/svcDel 四个函数，行内按钮、菜单、详情页共用同一套行为。 */
 function svcRowHtml(l,showIdn){
   const s=svcOf(l);const idn=DB.identities.find(i=>i.id===l.identityId);const m=methodOf(l);const st=statusOf(l);
   const hue=CAT_HUE[s.cat]!=null?CAT_HUE[s.cat]:220;
-  return `<div class="svc ${st}" style="background-image:linear-gradient(90deg,hsla(${hue},75%,62%,.11),transparent 55%)">${icoHtml(s)}<div class="svc-main"><div class="nm">${hlName(s.name)}</div>
+  return `<div class="svcwrap" data-svcwrap="${l.id}"><div class="svcreveal"><button class="svcact more" data-more="${l.id}" type="button" aria-label="更多操作"><span class="circ">···</span><span>更多</span></button><button class="svcact del" data-del="${l.id}" type="button" aria-label="删除"><span class="circ">${SVC_TRASH_SVG}</span><span>删除</span></button></div><div class="svc ${st}" data-svcrow="${l.id}" style="background-image:linear-gradient(90deg,hsla(${hue},75%,62%,.11),transparent 55%)">${icoHtml(s)}<div class="svc-main"><div class="nm">${hlName(s.name)}</div>
     <div class="meta">${s.domain?esc(s.domain):"自定义应用"} ${l.username?"· 账号 "+mask(l.username):""}</div>
     ${showIdn&&idn?`<div class="svc-caps">${idCapHtml(idn)}</div>`:""}</div>
-    <div class="sp"></div><div class="svc-actions"><span class="tag method ${m==="密码登录"?"":"auth"}">${esc(m)}</span>${statusTag(l)}<span class="tag cat">${esc(s.cat)}</span>
-    ${s.domain?`<button data-goto="${l.id}">前往登录 ↗</button>`:""}<button data-copyacc="${l.id}">复制账号</button><button data-copyid="${l.id}">复制身份</button><button data-edit="${l.id}">编辑</button><button data-del="${l.id}">删除</button><span class="setchev" aria-hidden="true">›</span></div></div>`;
+    <div class="sp"></div><div class="svc-actions"><span class="tag method ${m==="密码登录"?"":"auth"}">${esc(m)}</span>${statusTag(l)}<span class="tag cat">${esc(s.cat)}</span><span class="setchev" aria-hidden="true">›</span></div></div></div>`;
 }
+function svcGoto(id){const l=DB.links.find(x=>x.id===id);if(l&&l.domain)window.open("https://"+l.domain,"_blank","noopener")}
+function svcCopyAcc(id){const l=DB.links.find(x=>x.id===id);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(l.username||(idn?idn.value:""),"账号")}
+function svcCopyId(id){const l=DB.links.find(x=>x.id===id);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(idn?idn.value:"","身份")}
+function svcDel(id){const l=DB.links.find(x=>x.id===id);snapshotUndo("已删除「"+(l?svcOf(l).name:"服务")+"」");DB.links=DB.links.filter(x=>x.id!==id);save()}
+/* ---------- 服务动作菜单（全局一份）：··· 钮（不带删除）与长按（带删除）共用 ---------- */
+function closeSvcMenu(){const m=document.getElementById("svcMenu");if(m){m.classList.remove("open");m.innerHTML=""}}
+function openSvcMenu(id,anchor,withDelete){
+  const l=DB.links.find(x=>x.id===id);if(!l||!anchor)return;
+  const m=document.getElementById("svcMenu");if(!m)return;const s=svcOf(l);
+  m.innerHTML=
+    (s.domain?`<button data-mact="goto" type="button">前往登录 ↗</button>`:"")+
+    `<button data-mact="copyacc" type="button">复制账号</button>`+
+    `<button data-mact="copyid" type="button">复制身份</button>`+
+    `<button data-mact="edit" type="button">编辑</button>`+
+    (withDelete?`<button data-mact="del" type="button" style="color:#ff8a8e">删除</button>`:"");
+  m.querySelectorAll("[data-mact]").forEach(b=>b.onclick=()=>{
+    const act=b.dataset.mact;closeSvcMenu();closeSvcSwipe();
+    if(act==="goto")svcGoto(id);else if(act==="copyacc")svcCopyAcc(id);else if(act==="copyid")svcCopyId(id);else if(act==="edit")openSvcEdit(id);else if(act==="del")svcDel(id);
+  });
+  m.classList.add("open");
+  const r=anchor.getBoundingClientRect();
+  const mw=m.offsetWidth||180,mh=m.offsetHeight||(withDelete?264:220);
+  const x=Math.min(Math.max(8,r.right-mw),Math.max(8,window.innerWidth-mw-8));
+  let y=r.bottom+8;if(y+mh>window.innerHeight-8)y=Math.max(8,r.top-mh-8);
+  m.style.left=x+"px";m.style.top=y+"px";
+}
+document.addEventListener("pointerdown",e=>{const m=document.getElementById("svcMenu");if(m&&m.classList.contains("open")&&!m.contains(e.target))closeSvcMenu()},true);
+window.addEventListener("scroll",()=>closeSvcMenu(),{capture:true,passive:true});
+/* ---------- 服务行左滑：横向过阈值且横向占优才接管，纵向滚动/下拉不受影响 ---------- */
+const SVC_REVEAL_W=148;
+let svcOpenWrap=null;
+function closeSvcSwipe(){if(svcOpenWrap){const r=svcOpenWrap.querySelector(".svc");if(r)r.style.transform="";svcOpenWrap.classList.remove("open");svcOpenWrap=null}}
+function attachSvcSwipe(wrap){
+  const row=wrap.querySelector(".svc");if(!row)return;
+  let pid=null,sx=0,sy=0,base=0,curX=0,active=false,horiz=false;
+  const setX=x=>{curX=x;row.style.transform=`translateX(${x}px)`};
+  row.addEventListener("pointerdown",e=>{
+    if(e.target.closest("button"))return;
+    pid=e.pointerId;sx=e.clientX;sy=e.clientY;base=wrap.classList.contains("open")?-SVC_REVEAL_W:0;curX=base;active=true;horiz=false;
+  });
+  row.addEventListener("pointermove",e=>{
+    if(!active||e.pointerId!==pid)return;
+    const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(!horiz){
+      if(Math.abs(dx)<9||Math.abs(dx)<=Math.abs(dy))return;
+      horiz=true;row.classList.add("swiping");
+      if(svcOpenWrap&&svcOpenWrap!==wrap)closeSvcSwipe();
+    }
+    setX(Math.max(-SVC_REVEAL_W,Math.min(0,base+dx)));
+  });
+  const end=e=>{
+    if(!active||(e&&e.pointerId!==pid))return;
+    active=false;row.classList.remove("swiping");
+    if(!horiz)return;
+    if(curX<-SVC_REVEAL_W/3){wrap.classList.add("open");svcOpenWrap=wrap;setX(-SVC_REVEAL_W)}
+    else{wrap.classList.remove("open");if(svcOpenWrap===wrap)svcOpenWrap=null;setX(0)}
+  };
+  row.addEventListener("pointerup",end);
+  row.addEventListener("pointercancel",end);
+  /* 露出态下点行身（非露出钮）：收起并吞掉这次点击，别触发整行/行内动作 */
+  wrap.addEventListener("click",e=>{
+    if(!wrap.classList.contains("open"))return;
+    if(e.target.closest(".svcreveal"))return;
+    e.stopPropagation();e.preventDefault();closeSvcSwipe();
+  },true);
+}
+/* ---------- 长按菜单：压住约 480ms 不动（移动超 10px / 纵向滚动 / 松手都取消） ---------- */
+let svcLpSuppressAt=0;
+function attachSvcLongPress(el,id){
+  let timer=null,sx=0,sy=0;
+  const cancel=()=>{if(timer){clearTimeout(timer);timer=null}};
+  el.addEventListener("pointerdown",e=>{
+    if(e.target.closest&&e.target.closest("button"))return;
+    sx=e.clientX;sy=e.clientY;cancel();
+    timer=setTimeout(()=>{timer=null;svcLpSuppressAt=Date.now();buzz();openSvcMenu(id,el,true)},480);
+  });
+  el.addEventListener("pointermove",e=>{if(timer&&Math.hypot(e.clientX-sx,e.clientY-sy)>10)cancel()});
+  el.addEventListener("pointerup",cancel);
+  el.addEventListener("pointercancel",cancel);
+}
+/* 长按触发后松手的那次 click 全局吞掉（capture 先于任何条目自己的 onclick），不误触点按动作 */
+document.addEventListener("click",e=>{if(svcLpSuppressAt&&Date.now()-svcLpSuppressAt<400){e.stopPropagation();e.preventDefault();svcLpSuppressAt=0}},true);
+/* 原生拖拽残影全局拦截：服务图标被长按拖出幽灵图的问题（HTML5 拖拽在本应用无用途，卡片排序走 pointer 事件） */
+document.addEventListener("dragstart",e=>{e.preventDefault()},true);
 function bindSvcRows(root){
-  root.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{const l=DB.links.find(x=>x.id===b.dataset.del);snapshotUndo("已删除「"+(l?svcOf(l).name:"服务")+"」");DB.links=DB.links.filter(x=>x.id!==b.dataset.del);save()});
-  root.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>{const l=DB.links.find(x=>x.id===b.dataset.goto);if(l&&l.domain)window.open("https://"+l.domain,"_blank","noopener")});
-  root.querySelectorAll("[data-copyacc]").forEach(b=>b.onclick=()=>{const l=DB.links.find(x=>x.id===b.dataset.copyacc);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(l.username||(idn?idn.value:""),"账号")});
-  root.querySelectorAll("[data-copyid]").forEach(b=>b.onclick=()=>{const l=DB.links.find(x=>x.id===b.dataset.copyid);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(idn?idn.value:"","身份")});
+  root.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>svcDel(b.dataset.del));
+  root.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>svcGoto(b.dataset.goto));
+  root.querySelectorAll("[data-copyacc]").forEach(b=>b.onclick=()=>svcCopyAcc(b.dataset.copyacc));
+  root.querySelectorAll("[data-copyid]").forEach(b=>b.onclick=()=>svcCopyId(b.dataset.copyid));
   root.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openSvcEdit(b.dataset.edit));
+  root.querySelectorAll("[data-more]").forEach(b=>b.onclick=e=>{e.stopPropagation();openSvcMenu(b.dataset.more,b,false)});
+  root.querySelectorAll(".svcwrap").forEach(w=>{attachSvcSwipe(w);const row=w.querySelector(".svc");if(row)attachSvcLongPress(row,w.dataset.svcwrap)});
 }
 document.getElementById("btnViewGrid").onclick=()=>{svcView="grid";render()};
 document.getElementById("btnViewList").onclick=()=>{svcView="list";render()};
@@ -1272,10 +1413,10 @@ function renderApps(){
   fb.innerHTML=appFilter?`<div class="filterbar"><span>${appFilter==="nomethod"?"🩺 正在看：还没标登录方式的服务（点行尾「编辑」就能补上）":"🩺 正在看：被重复绑定的服务"}</span><span style="flex:1"></span>${appFilter==="nomethod"?`<button id="btnBulkMethod" type="button">把下面全部标为「密码登录」</button>`:""}<button id="btnClearFilter" type="button">清除筛选</button></div>`:"";
   const cf=document.getElementById("btnClearFilter");if(cf)cf.onclick=()=>{appFilter=null;render()};
   const bm=document.getElementById("btnBulkMethod");
-  if(bm)bm.onclick=()=>{
+  if(bm)bm.onclick=async()=>{
     const targets=DB.links.filter(l=>methodMissing(l));
     if(!targets.length)return;
-    if(!confirm("把 "+targets.length+" 个还没标登录方式的服务全标为「密码登录」？（旧数据本来就是按密码登录兜底的，个别是授权登录的之后单独改。）"))return;
+    if(!(await appConfirm("把 "+targets.length+" 个还没标登录方式的服务全标为「密码登录」？（旧数据本来就是按密码登录兜底的，个别是授权登录的之后单独改。）")))return;
     snapshotUndo("已批量补标 "+targets.length+" 个服务");
     targets.forEach(l=>l.method="密码登录");save();toast("已补标 "+targets.length+" 个");
   };
@@ -1342,6 +1483,7 @@ let galaxyFitSize=null;       /* 上次落位用的画布尺寸（WxH）；尺�
 let galaxyFitPending=false;   /* 落位时画布测不到真实尺寸（隐藏预渲染）用的回退尺寸，待可见后按真实尺寸重落 */
 let galaxyFit={scale:0,tx:0,ty:0}; /* 当前范围的 fit 结果：zoom=1 时的缩放与平移（translate），与 galaxyFitKey 同步维护 */
 let galaxySuppressClick=false;/* 拖动刚结束时吞掉紧随的 click */
+let galaxyGestureOn=false;    /* 手势进行中（至少一指按下）：落位闭环校正此时禁止介入（v1.10.3） */
 let galaxyView=null;          /* 当前画布视图数据（缩放/气泡世界坐标），供平移时实时算距离缩放 */
 function galaxyIdentities(){
   const ord=i=>i.type==="email"?0:i.type==="phone"?1:2;
@@ -1438,6 +1580,7 @@ function galaxyApplyPan(){
    桩环境（jsdom）getBoundingClientRect 全 0，测不到就跳过、不影响桩测；真机上无论布局口径怎么偏，
    都以实测为准把核心拉回目标位——这是继 v1.10.1「桩里全过、真机带偏」之后加的保险。 */
 function galaxyCorrectFit(st){
+  if(galaxyGestureOn)return; /* 手势期间及刚结束不许校正介入：baseT 被改会把正在进行的捏合/拖拽带偏（v1.10.3 嫌疑 b 的硬守卫） */
   const v=galaxyView;if(!v||!v.world)return;
   const core=v.world.querySelector(".gcore");if(!core)return;
   const sr=st.getBoundingClientRect(),cr=core.getBoundingClientRect();
@@ -1470,9 +1613,16 @@ function galaxyAttachDrag(st){
     if(frames<300&&(Math.abs(vel.x)>0.15||Math.abs(vel.y)>0.15||nx!==c2.x||ny!==c2.y))anim=requestAnimationFrame(loop);
   };
   const stagePos=e=>{const r=st.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top}};
+  /* v1.10.3 捏合坐标改造：pointers 只存原始 client 坐标，每次计算（冻结/逐帧）都取一份
+     新鲜 rect 把两指一起换算到画布坐标。旧版存的是各自事件时刻换算好的画布坐标——第一指
+     落下后若画布在屏幕上移动过（切页入场动画、main 滚动未落定），冻结锚点就混了两个时刻的
+     坐标系：锚点不在双指之下，缩放误差随 f 放大，整群「走掉」（录屏里的向下漂移即此形态）。
+     混坐标系在桩里测不出（jsdom rect 恒 0、新旧等价），真机才暴露。 */
+  const toStage=(p,r)=>({x:p.x-r.left,y:p.y-r.top});
   const applyPinch=()=>{
     const v=galaxyView;if(!v||!pinch||pointers.size<2)return;
-    const ps=[...pointers.values()];
+    const r=st.getBoundingClientRect();
+    const ps=[...pointers.values()].map(p=>toStage(p,r));
     const c={x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2};
     const d=Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y);
     const res=galaxyPinchFrame(v.fFit,pinch.f0,pinch.wx,pinch.wy,pinch.d0>0?d/pinch.d0:1,c.x,c.y);
@@ -1481,14 +1631,16 @@ function galaxyAttachDrag(st){
     galaxyApplyPan();
   };
   st.addEventListener("pointerdown",e=>{
-    stopAnim();frames=0;
+    stopAnim();frames=0;galaxyGestureOn=true;
     if(pointers.size>=2)return;
-    pointers.set(e.pointerId,stagePos(e));
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     try{st.setPointerCapture(e.pointerId)}catch(_){}
     if(pointers.size===2){
-      /* 第二指落下：捏合成立，单指拖拽立即作废（不清 suppress，捏合全程吞点击） */
+      /* 第二指落下：捏合成立，单指拖拽立即作废（不清 suppress，捏合全程吞点击）；
+         锚点在此刻冻结：两指原始坐标用同一份新鲜 rect 换算，口径与之后逐帧完全一致 */
       drag=null;vel={x:0,y:0};galaxySuppressClick=true;st.classList.remove("grabbing");
-      const v=galaxyView;const ps=[...pointers.values()];
+      const v=galaxyView;const r=st.getBoundingClientRect();
+      const ps=[...pointers.values()].map(p=>toStage(p,r));
       const c={x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2};
       const tx=v.baseT.x+galaxyPan.x,ty=v.baseT.y+galaxyPan.y;
       pinch={d0:Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y),f0:v.f,wx:(c.x-tx)/v.f,wy:(c.y-ty)/v.f};
@@ -1499,7 +1651,7 @@ function galaxyAttachDrag(st){
     }
   });
   st.addEventListener("pointermove",e=>{
-    if(pointers.has(e.pointerId))pointers.set(e.pointerId,stagePos(e));
+    if(pointers.has(e.pointerId))pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pinch){applyPinch();return}
     if(!drag||e.pointerId!==drag.id)return;
     const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
@@ -1515,6 +1667,7 @@ function galaxyAttachDrag(st){
   });
   const end=e=>{
     pointers.delete(e.pointerId);
+    if(pointers.size===0)galaxyGestureOn=false;
     if(pinch){
       /* 捏合结束：不启惯性；pinch 标记保留到两指全松开（防剩余一指被误当新拖拽），
          全松开后按老规矩把 suppress 再维持 90ms 吞掉紧随的点击 */
@@ -1751,10 +1904,10 @@ document.getElementById("btnIdLabelSave").onclick=()=>{
   i.label=document.getElementById("idDetailLabel").value.trim();
   save();openIdDetailRefresh();toast("备注已保存");
 };
-document.getElementById("btnIdDelete").onclick=()=>{
+document.getElementById("btnIdDelete").onclick=async()=>{
   const i=DB.identities.find(x=>x.id===detailId);if(!i)return;
   const n=DB.links.filter(l=>l.identityId===detailId).length;
-  if(!confirm("删除身份卡「"+i.value+"」？它绑定的 "+n+" 个服务记录会一起进回收站（设置 → 回收站可恢复），不是直接消失。"))return;
+  if(!(await appConfirm("删除身份卡「"+i.value+"」？它绑定的 "+n+" 个服务记录会一起进回收站（设置 → 回收站可恢复），不是直接消失。")))return;
   snapshotUndo("已删除身份卡「"+i.value+"」（也进了回收站）");
   if(!Array.isArray(DB.trash))DB.trash=[];
   DB.trash.push({identity:i,links:DB.links.filter(l=>l.identityId===detailId),deletedAt:Date.now()});
@@ -1777,9 +1930,9 @@ function renderTrash(){
     e.links.forEach(l=>{if(!DB.links.some(x=>x.id===l.id))DB.links.push(l)});
     DB.trash.splice(+b.dataset.restore,1);save();renderTrash();toast("已恢复「"+e.identity.value+"」整卡");
   });
-  box.querySelectorAll("[data-purge]").forEach(b=>b.onclick=()=>{
+  box.querySelectorAll("[data-purge]").forEach(b=>b.onclick=async()=>{
     const e=DB.trash[+b.dataset.purge];if(!e)return;
-    if(!confirm("彻底删除「"+e.identity.value+"」及其 "+e.links.length+" 条绑定？这一步不能撤销。"))return;
+    if(!(await appConfirm("彻底删除「"+e.identity.value+"」及其 "+e.links.length+" 条绑定？这一步不能撤销。")))return;
     DB.trash.splice(+b.dataset.purge,1);save();renderTrash();toast("已彻底删除");
   });
 }
@@ -1790,17 +1943,17 @@ document.getElementById("btnSettingsDone").onclick=()=>switchView("wallet");
 /* 调整卡片顺序：跳卡包页（排序手势在卡包页：长按卡片拖动） */
 document.getElementById("btnGotoCards").onclick=()=>{switchView("wallet");toast("在卡包页长按卡片约半秒，就能拖动排序",2600)};
 /* 载入示例：已有真实数据时先警告（载入会覆盖当前数据进示例模式） */
-document.getElementById("btnDemoLoad").onclick=()=>{
+document.getElementById("btnDemoLoad").onclick=async()=>{
   if(isDemo()){toast("已经在示例数据里了，去卡包页点点看");switchView("wallet");return}
-  if((DB.identities.length||DB.links.length)&&!confirm("载入示例会【替换掉你当前的数据】换成示例数据（只是给你看看长什么样）。\n确定载入？建议先「导出备份」留一份。"))return;
+  if((DB.identities.length||DB.links.length)&&!(await appConfirm("载入示例会【替换掉你当前的数据】换成示例数据（只是给你看看长什么样）。\n确定载入？建议先「导出备份」留一份。")))return;
   loadDemo();switchView("wallet");
 };
 /* 清空全部数据：只清本机（localStorage），绝不动 WebDAV 云端备份——
    不走 save()（那会触发 push 把空数据传上云），只 persistLocal 并掐掉待发的防抖上传。 */
-document.getElementById("btnWipe").onclick=()=>{
+document.getElementById("btnWipe").onclick=async()=>{
   if(!DB.identities.length&&!DB.links.length&&!(DB.trash||[]).length){toast("现在没有数据可清");return}
-  if(!confirm("清空全部数据？本机上的 "+DB.identities.length+" 张身份卡、"+DB.links.length+" 条绑定和回收站会被全部删除。\n\n只清这台设备：WebDAV 云端备份不会被动到，下次打开页面时云端那份可能又被拉回来——想连云端一起清，先去 WebDAV 备份里处理。"))return;
-  if(!confirm("再确认一次：真的要清空本机全部数据吗？这一步不能撤销。"))return;
+  if(!(await appConfirm("清空全部数据？本机上的 "+DB.identities.length+" 张身份卡、"+DB.links.length+" 条绑定和回收站会被全部删除。\n\n只清这台设备：WebDAV 云端备份不会被动到，下次打开页面时云端那份可能又被拉回来——想连云端一起清，先去 WebDAV 备份里处理。")))return;
+  if(!(await appConfirm("再确认一次：真的要清空本机全部数据吗？这一步不能撤销。")))return;
   DB=normDB({identities:[],links:[],trash:[],updatedAt:0});
   selId=null;galaxySel="all";galaxyHi=null;detailId=null;appFilter=null;
   clearTimeout(pushTimer);davDirty=false;
@@ -1837,13 +1990,13 @@ document.getElementById("addMenuPhone").onclick=()=>openIdDlg("phone");
 document.getElementById("addMenuAcct").onclick=()=>openIdDlg("wechat");
 document.getElementById("addMenuImport").onclick=()=>{closeAddMenu();document.getElementById("dlgImport").showModal()};
 document.getElementById("btnPanelAdd").onclick=()=>openAddSvc(selId);
-document.getElementById("btnIdSave").onclick=()=>{
+document.getElementById("btnIdSave").onclick=async()=>{
   const v=document.getElementById("idValue").value.trim();if(!v)return alert("先填邮箱 / 手机号 / 微信号 / QQ号 / 账户名");
   const type=document.getElementById("idType").value;
   const dup=DB.identities.find(i=>i.value.toLowerCase()===v.toLowerCase());
   if(dup){document.getElementById("dlgId").close();selId=dup.id;cardFilter="all";switchView("wallet");toast("这张卡已经有了，已帮你定位到它");return}
-  if(type==="email"&&!/^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(v)&&!confirm("「"+v+"」看起来不像邮箱地址，确定保存吗？"))return;
-  if(type==="phone"&&!/^1\d{10}$/.test(v.replace(/[\s-]/g,""))&&!confirm("「"+v+"」不像 11 位手机号，确定保存吗？"))return;
+  if(type==="email"&&!/^[\w.+-]+@[\w-]+(\.[\w-]+)+$/.test(v)&&!(await appConfirm("「"+v+"」看起来不像邮箱地址，确定保存吗？")))return;
+  if(type==="phone"&&!/^1\d{10}$/.test(v.replace(/[\s-]/g,""))&&!(await appConfirm("「"+v+"」不像 11 位手机号，确定保存吗？")))return;
   DB.identities.push({id:uid(),type,value:v,label:document.getElementById("idLabel").value.trim(),createdAt:Date.now()});
   document.getElementById("dlgId").close();save();};
 function openAddSvc(presetId){
@@ -1855,11 +2008,11 @@ function openAddSvc(presetId){
   document.getElementById("svcStatus").value="active";
   document.getElementById("dlgSvc").showModal();
 }
-document.getElementById("btnSvcSave").onclick=()=>{
+document.getElementById("btnSvcSave").onclick=async()=>{
   const name=document.getElementById("svcName").value.trim();if(!name)return alert("先填服务名");
   const domain=document.getElementById("svcDomain").value.trim().toLowerCase().replace(/^https?:\/\//,"").replace(/\/.*$/,"");
   const iid=document.getElementById("svcIdentity").value;
-  if(DB.links.some(l=>l.identityId===iid&&(l.domain||"")===domain&&(l.name||"")===name)&&!confirm("这个身份已经绑了「"+name+"」，再加一条吗？（同一服务用两个号登的情况才需要）"))return;
+  if(DB.links.some(l=>l.identityId===iid&&(l.domain||"")===domain&&(l.name||"")===name)&&!(await appConfirm("这个身份已经绑了「"+name+"」，再加一条吗？（同一服务用两个号登的情况才需要）")))return;
   DB.links.push({id:uid(),identityId:iid,domain,name,username:document.getElementById("svcUsername").value.trim(),method:document.getElementById("svcMethod").value,status:document.getElementById("svcStatus").value,createdAt:Date.now()});
   document.getElementById("dlgSvc").close();save();};
 function openSvcEdit(linkId){
@@ -2035,9 +2188,9 @@ document.getElementById("btnApplyCand").onclick=()=>{
   if(noIdn)m+="；"+noIdn+" 条没认出绑哪个身份、已跳过（在候选里选好身份再导一次）";
   toast(m,3400);};
 document.getElementById("btnImport").onclick=()=>document.getElementById("dlgImport").showModal();
-document.getElementById("btnExport").onclick=()=>{
+document.getElementById("btnExport").onclick=async()=>{
   if(localStorage.getItem("atlas-export-warned")!=="1"){
-    if(!confirm("导出的 JSON 是【明文】的：包含你的邮箱、手机号和各服务的账号名（不含密码）。\n请存到安全的地方，不要随手发给别人。继续导出？"))return;
+    if(!(await appConfirm("导出的 JSON 是【明文】的：包含你的邮箱、手机号和各服务的账号名（不含密码）。\n请存到安全的地方，不要随手发给别人。继续导出？")))return;
     localStorage.setItem("atlas-export-warned","1");
   }
   const d=new Date();const ds=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
@@ -2050,7 +2203,7 @@ document.getElementById("fileRestore").onchange=async e=>{
   try{
     const j=JSON.parse(await f.text());
     if(!j||!Array.isArray(j.identities)||!Array.isArray(j.links))throw new Error("这不是绑哪儿的备份文件（缺 identities/links）");
-    if(!confirm("用这份备份恢复？当前设备上的 "+DB.identities.length+" 张身份卡、"+DB.links.length+" 条绑定会被整份替换。\n（建议先把现在的导出一份留底。）"))return;
+    if(!(await appConfirm("用这份备份恢复？当前设备上的 "+DB.identities.length+" 张身份卡、"+DB.links.length+" 条绑定会被整份替换。\n（建议先把现在的导出一份留底。）")))return;
     snapshotUndo("已用备份恢复（恢复前的状态可撤销）");
     DB=normDB(j);selId=null;galaxySel="all";galaxyHi=null;appFilter=null;
     save();toast("恢复完成："+DB.identities.length+" 张身份卡、"+DB.links.length+" 条绑定",3000);
@@ -2105,7 +2258,7 @@ async function pull(silent){
       if(davDirty){
         /* 两边都有改动：自动拉取绝不静默覆盖本地未上传的修改 */
         if(silent){setSync("err","⚠ 云端和本机都有新改动，未自动覆盖（本地数据还在）。确认要用云端版时，点 WebDAV 里的「立即拉取」");return}
-        if(!confirm("云端备份比本机新，但本机还有没上传成功的改动。\n拉取会【覆盖】本机这些改动，确定继续？"))return;
+        if(!(await appConfirm("云端备份比本机新，但本机还有没上传成功的改动。\n拉取会【覆盖】本机这些改动，确定继续？")))return;
       }
       DB=normDB(remote);localStorage.setItem("atlas-db",JSON.stringify(DB));
       lastPushHash=hashStr(JSON.stringify(DB));localStorage.setItem("atlas-dav-hash",lastPushHash);

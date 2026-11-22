@@ -326,6 +326,44 @@ const chips = doc => [...doc.querySelectorAll("[data-gchip]")];
     await sleep(160);
     bub1.click(); await sleep(40);
     ok("D 点击吞没过期后：气泡点击恢复（信息条出现）", !!doc.querySelector(".ginfo"));
+
+    /* v1.10.3 回归：多帧捏合锚点不变性 + 画布 rect 中途移动（切页入场动画/滚动未落定）。
+       旧版把第一指的画布坐标在它落下时就换算存死；若画布随后在屏幕上移动 30px（动画落定），
+       冻结锚点混了两个时刻的坐标系，缩放后锚点漂移 ≈ 位移×(f/f0−1)（数十 px）。
+       新版存原始 client 坐标、每次用同一份新鲜 rect 换算：模拟 rect 中途平移后，
+       连发 6 帧（中心平移 + 间距拉大），手势开始时双指中心下的世界点最终仍须钉在最终中心 <1px。 */
+    {
+      win.eval("galaxyHi=null"); win.render(); await sleep(40);
+      const st2 = doc.getElementById("gstage");
+      const F0 = readFitD();
+      ok("D2 多帧捏合前置：当前 fit 可读", !!F0, F0 && F0.tf);
+      const rectH = { left: 0, top: 200 };
+      const origGBCR = win.HTMLElement.prototype.getBoundingClientRect;
+      win.HTMLElement.prototype.getBoundingClientRect = function () {
+        if (this.id === "gstage") return { left: rectH.left, top: rectH.top, width: 390, height: 336, right: rectH.left + 390, bottom: rectH.top + 336, x: rectH.left, y: rectH.top };
+        return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, x: 0, y: 0 };
+      };
+      try {
+        st2.dispatchEvent(pev("pointerdown", 11, 170, 350));   /* 第一指：rect.top=200 时画布坐标 (170,150) */
+        rectH.top = 230;                                       /* 画布在两指之间下移 30px（入场动画落定） */
+        st2.dispatchEvent(pev("pointerdown", 12, 210, 380));   /* 第二指：新 rect 下画布坐标 (210,150) */
+        /* 冻结中心（新 rect 口径）=(190,135)；其下的世界点即锚点 */
+        const aw = { x: (190 - F0.t.x) / F0.s, y: (135 - F0.t.y) / F0.s };
+        for (let i = 1; i <= 6; i++) {
+          st2.dispatchEvent(pev("pointermove", 11, 170 + 3 * i, 350 + 2 * i));
+          st2.dispatchEvent(pev("pointermove", 12, 210 + 23 * i, 380 + 2 * i));
+        }
+        const FF = readFitD();
+        /* 最终中心（rect.top=230）：p1=(188,132) p2=(348,162) → (268,147) */
+        const ax = FF.t.x + aw.x * FF.s, ay = FF.t.y + aw.y * FF.s;
+        const drift = Math.hypot(ax - 268, ay - 147);
+        ok("D2 多帧捏合（rect 中途平移 30px）：锚点漂移 <1px", !!FF && drift < 1, `drift=${drift.toFixed(2)}px f:${F0.s}->${FF && FF.s}`);
+        st2.dispatchEvent(pev("pointerup", 12, 348, 392));
+        st2.dispatchEvent(pev("pointerup", 11, 188, 362));
+      } finally {
+        win.HTMLElement.prototype.getBoundingClientRect = origGBCR;
+      }
+    }
     dom.window.close();
   }
 
