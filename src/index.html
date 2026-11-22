@@ -171,6 +171,9 @@ mark{background:rgba(255,214,90,.85);color:#20234a;border-radius:3px;padding:0 1
 .svcwrap{position:relative;overflow:hidden;border-radius:var(--radius);margin-bottom:10px}
 .svcwrap .svc{margin-bottom:0;position:relative;z-index:1;touch-action:pan-y}
 .svcwrap .svc.swiping{transition:none}
+/* 最近添加的行身（.svcbody）与 .svc 共用同一套左滑露出（v1.10.4 补：此前最近行只有长按、没左滑） */
+.svcwrap .svcbody{margin-bottom:0;position:relative;z-index:1;touch-action:pan-y}
+.svcwrap .svcbody.swiping{transition:none}
 .svcreveal{position:absolute;top:0;right:0;bottom:0;z-index:0;display:flex;align-items:center;gap:14px;padding:0 16px 0 8px;background:#101013}
 .svcact{display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:none;box-shadow:none;padding:0;min-height:0;color:var(--muted2);font-size:11px;-webkit-backdrop-filter:none;backdrop-filter:none}
 .svcact .circ{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:800;color:#fff;line-height:1}
@@ -552,7 +555,7 @@ dialog::backdrop{background:rgba(0,0,0,.55);backdrop-filter:blur(7px) saturate(1
       <button class="setrow" id="btnImport" type="button"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M4.5 12h15"/></svg></span><span class="settx"><span class="t">自动录入</span><div class="s">导入 Vaultwarden / 密码 CSV / 粘贴文本，自动识别绑定关系</div></span><span class="setchev">›</span></button>
       <button class="setrow" id="btnShare" type="button"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 13.8a4 4 0 0 0 5.9.3l2.8-2.8a4.04 4.04 0 1 0-5.7-5.7l-1.6 1.6"/><path d="M13.8 10.2a4 4 0 0 0-5.9-.3l-2.8 2.8a4.04 4.04 0 1 0 5.7 5.7l1.6-1.6"/></svg></span><span class="settx"><span class="t">分享给朋友</span><div class="s">发链接给朋友，各人的数据在各人设备里，互不干扰</div></span><span class="setchev">›</span></button>
       <div class="setrow static"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="10.5" width="13" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/><circle cx="12" cy="15.3" r="1.2" fill="currentColor" stroke="none"/></svg></span><span class="settx"><span class="t">屏幕锁</span><div class="s">打开 App、或切回超过 1 分钟时要输 4 位 PIN</div></span><button class="iosswitch" id="btnLock" type="button" role="switch" aria-label="屏幕锁开关"><i></i></button></div>
-      <button class="setrow" id="btnTrash" type="button"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6.5h14M10 6V4.7A1.7 1.7 0 0 1 11.7 3h.6A1.7 1.7 0 0 1 14 4.7V6M7 6.5l.8 11.7a2 2 0 0 0 2 1.8h4.4a2 2 0 0 0 2-1.8L17 6.5"/><path d="M10.2 10.5v5.5M13.8 10.5v5.5"/></svg></span><span class="settx"><span class="t">回收站</span><div class="s">删掉的身份卡先放这儿，能恢复</div></span><span class="setval" id="setTrashSub"></span><span class="setchev">›</span></button>
+      <button class="setrow" id="btnTrash" type="button"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6.5h14M10 6V4.7A1.7 1.7 0 0 1 11.7 3h.6A1.7 1.7 0 0 1 14 4.7V6M7 6.5l.8 11.7a2 2 0 0 0 2 1.8h4.4a2 2 0 0 0 2-1.8L17 6.5"/><path d="M10.2 10.5v5.5M13.8 10.5v5.5"/></svg></span><span class="settx"><span class="t">回收站</span><div class="s">删掉的身份卡和服务先放这儿，能恢复</div></span><span class="setval" id="setTrashSub"></span><span class="setchev">›</span></button>
       <button class="setrow" id="btnHelp" type="button"><span class="setico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M9.9 9.7a2.25 2.25 0 1 1 3.3 2c-.7.35-1 .8-1 1.7"/><circle cx="12.2" cy="16.9" r=".5" fill="currentColor" stroke="none"/></svg></span><span class="settx"><span class="t">使用说明</span><div class="s">三步上手 + 常见问题（数据存哪、换手机怎么办）</div></span><span class="setchev">›</span></button>
     </div>
     <div class="setgroup-t">关于</div>
@@ -1070,7 +1073,7 @@ function renderSettings(){
   const lk=document.getElementById("btnLock");
   if(lk){lk.classList.toggle("on",lockEnabled());lk.setAttribute("aria-checked",lockEnabled()?"true":"false")}
   const ts=document.getElementById("setTrashSub");
-  if(ts){const n=(DB.trash||[]).length;ts.textContent=n?(n+" 张"):""}
+  if(ts){const n=(DB.trash||[]).length;ts.textContent=n?(n+" 项"):""}
 }
 function switchView(v){view=v;render();const sc=document.querySelector("main");if(sc)sc.scrollTo({top:0,behavior:"smooth"});else window.scrollTo({top:0,behavior:"smooth"})}
 document.querySelectorAll(".tabbtn").forEach(b=>b.onclick=()=>{buzz();switchView(b.dataset.view)});
@@ -1236,21 +1239,26 @@ function renderWallet(){
   document.getElementById("recentBox").innerHTML=recentSorted.length?rGroups.map(lb=>{
     const bySvc=new Map();
     rMap.get(lb).forEach(l=>{const k=svcKey(l);if(!bySvc.has(k))bySvc.set(k,{s:svcOf(l),first:l,ids:[]});const g=bySvc.get(k);if(!g.ids.includes(l.identityId))g.ids.push(l.identityId)});
-    return `<div class="rgroup-t">${esc(lb)}</div>`+[...bySvc.values()].map(g=>`<div class="rcard rrow" data-edit="${g.first.id}">${icoHtml(g.s)}<div style="min-width:0"><div class="rn">${esc(g.s.name)}${statusOf(g.first)!=="active"?" · "+STATUS[statusOf(g.first)]:""}</div><div class="rcaps">${g.ids.map(id=>idCapHtml(DB.identities.find(i=>i.id===id))).join("")}</div></div><span class="rcat">${esc(g.s.cat)}</span></div>`).join("");
+    return `<div class="rgroup-t">${esc(lb)}</div>`+[...bySvc.values()].map(g=>`<div class="svcwrap" data-svcwrap="${g.first.id}">${svcRevealHtml(g.first.id)}<div class="rcard rrow svcbody" data-edit="${g.first.id}">${icoHtml(g.s)}<div style="min-width:0"><div class="rn">${esc(g.s.name)}${statusOf(g.first)!=="active"?" · "+STATUS[statusOf(g.first)]:""}</div><div class="rcaps">${g.ids.map(id=>idCapHtml(DB.identities.find(i=>i.id===id))).join("")}</div></div><span class="rcat">${esc(g.s.cat)}</span></div></div>`).join("");
   }).join("")
     :'<div class="empty">还没有添加过服务。</div>';
-  const rb=document.getElementById("recentBox");
-  rb.querySelectorAll("[data-edit]").forEach(c=>{c.onclick=()=>openSvcEdit(c.dataset.edit);attachSvcLongPress(c,c.dataset.edit)});
+  /* 最近行与服务行同权：bindSvcRows 统一绑 data-edit 点开详情、露出层 ···/删除、左滑与长按菜单
+     （v1.10.4 补左滑：此前最近行是另一套渲染、只挂了长按，真机左滑无反应） */
+  bindSvcRows(document.getElementById("recentBox"));
 }
 /* 服务行（列表视图 / 全部 App 页共用） */
 const SVC_TRASH_SVG='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1.1 12H7.1L6 9zm4 2v8h1.7v-8H10zm3.3 0v8H15v-8h-1.7z"/></svg>';
 /* 服务行（v1.10.3 左滑版）：常显只剩登录方式胶囊（金色「密码登录」为主按钮位）；
    行身左滑露出右侧圆钮（··· 更多 / 删除），其余动作收进 ··· 菜单；长按行身/网格/最近行也能弹同一菜单（带删除）。
    动作实现收敛到 svcGoto/svcCopyAcc/svcCopyId/svcDel 四个函数，行内按钮、菜单、详情页共用同一套行为。 */
+/* 左滑露出层（··· 更多 / 删除圆钮）：服务行与最近添加行共用同一份标记，行为绑在 bindSvcRows */
+function svcRevealHtml(id){
+  return `<div class="svcreveal"><button class="svcact more" data-more="${id}" type="button" aria-label="更多操作"><span class="circ">···</span><span>更多</span></button><button class="svcact del" data-del="${id}" type="button" aria-label="删除"><span class="circ">${SVC_TRASH_SVG}</span><span>删除</span></button></div>`;
+}
 function svcRowHtml(l,showIdn){
   const s=svcOf(l);const idn=DB.identities.find(i=>i.id===l.identityId);const m=methodOf(l);const st=statusOf(l);
   const hue=CAT_HUE[s.cat]!=null?CAT_HUE[s.cat]:220;
-  return `<div class="svcwrap" data-svcwrap="${l.id}"><div class="svcreveal"><button class="svcact more" data-more="${l.id}" type="button" aria-label="更多操作"><span class="circ">···</span><span>更多</span></button><button class="svcact del" data-del="${l.id}" type="button" aria-label="删除"><span class="circ">${SVC_TRASH_SVG}</span><span>删除</span></button></div><div class="svc ${st}" data-svcrow="${l.id}" style="background-image:linear-gradient(90deg,hsla(${hue},75%,62%,.11),transparent 55%)">${icoHtml(s)}<div class="svc-main"><div class="nm">${hlName(s.name)}</div>
+  return `<div class="svcwrap" data-svcwrap="${l.id}">${svcRevealHtml(l.id)}<div class="svc ${st}" data-svcrow="${l.id}" style="background-image:linear-gradient(90deg,hsla(${hue},75%,62%,.11),transparent 55%)">${icoHtml(s)}<div class="svc-main"><div class="nm">${hlName(s.name)}</div>
     <div class="meta">${s.domain?esc(s.domain):"自定义应用"} ${l.username?"· 账号 "+mask(l.username):""}</div>
     ${showIdn&&idn?`<div class="svc-caps">${idCapHtml(idn)}</div>`:""}</div>
     <div class="sp"></div><div class="svc-actions"><span class="tag method ${m==="密码登录"?"":"auth"}">${esc(m)}</span>${statusTag(l)}<span class="tag cat">${esc(s.cat)}</span><span class="setchev" aria-hidden="true">›</span></div></div></div>`;
@@ -1258,7 +1266,20 @@ function svcRowHtml(l,showIdn){
 function svcGoto(id){const l=DB.links.find(x=>x.id===id);if(l&&l.domain)window.open("https://"+l.domain,"_blank","noopener")}
 function svcCopyAcc(id){const l=DB.links.find(x=>x.id===id);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(l.username||(idn?idn.value:""),"账号")}
 function svcCopyId(id){const l=DB.links.find(x=>x.id===id);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(idn?idn.value:"","身份")}
-function svcDel(id){const l=DB.links.find(x=>x.id===id);snapshotUndo("已删除「"+(l?svcOf(l).name:"服务")+"」");DB.links=DB.links.filter(x=>x.id!==id);save()}
+/* 删除服务（全站唯一实现：行左滑/长按菜单/··· 菜单/详情页都走这里）。
+   v1.10.4 修回收站脱节：DB.trash 此前只收身份卡删除（{identity,links} 条目），svcDel 只存撤销快照、
+   从不写 trash——删掉的服务在回收站里永远看不到。现在删服务同步写一条 {link,idnValue} 条目，
+   renderTrash 分形状渲染/恢复/彻底删除；删除瞬间 buzz 一下与其它手势同口径。 */
+function svcDel(id){
+  const l=DB.links.find(x=>x.id===id);if(!l)return;
+  snapshotUndo("已删除「"+svcOf(l).name+"」");
+  if(!Array.isArray(DB.trash))DB.trash=[];
+  const idn=DB.identities.find(i=>i.id===l.identityId);
+  DB.trash.push({link:l,idnValue:idn?idn.value:"",deletedAt:Date.now()});
+  DB.links=DB.links.filter(x=>x.id!==id);
+  buzz();
+  save();
+}
 /* ---------- 服务动作菜单（全局一份）：··· 钮（不带删除）与长按（带删除）共用 ---------- */
 function closeSvcMenu(){const m=document.getElementById("svcMenu");if(m){m.classList.remove("open");m.innerHTML=""}}
 function openSvcMenu(id,anchor,withDelete){
@@ -1286,9 +1307,9 @@ window.addEventListener("scroll",()=>closeSvcMenu(),{capture:true,passive:true})
 /* ---------- 服务行左滑：横向过阈值且横向占优才接管，纵向滚动/下拉不受影响 ---------- */
 const SVC_REVEAL_W=148;
 let svcOpenWrap=null;
-function closeSvcSwipe(){if(svcOpenWrap){const r=svcOpenWrap.querySelector(".svc");if(r)r.style.transform="";svcOpenWrap.classList.remove("open");svcOpenWrap=null}}
+function closeSvcSwipe(){if(svcOpenWrap){const r=svcOpenWrap.querySelector(".svc,.svcbody");if(r)r.style.transform="";svcOpenWrap.classList.remove("open");svcOpenWrap=null}}
 function attachSvcSwipe(wrap){
-  const row=wrap.querySelector(".svc");if(!row)return;
+  const row=wrap.querySelector(".svc,.svcbody");if(!row)return;
   let pid=null,sx=0,sy=0,base=0,curX=0,active=false,horiz=false;
   const setX=x=>{curX=x;row.style.transform=`translateX(${x}px)`};
   row.addEventListener("pointerdown",e=>{
@@ -1346,7 +1367,7 @@ function bindSvcRows(root){
   root.querySelectorAll("[data-copyid]").forEach(b=>b.onclick=()=>svcCopyId(b.dataset.copyid));
   root.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openSvcEdit(b.dataset.edit));
   root.querySelectorAll("[data-more]").forEach(b=>b.onclick=e=>{e.stopPropagation();openSvcMenu(b.dataset.more,b,false)});
-  root.querySelectorAll(".svcwrap").forEach(w=>{attachSvcSwipe(w);const row=w.querySelector(".svc");if(row)attachSvcLongPress(row,w.dataset.svcwrap)});
+  root.querySelectorAll(".svcwrap").forEach(w=>{attachSvcSwipe(w);const row=w.querySelector(".svc,.svcbody");if(row)attachSvcLongPress(row,w.dataset.svcwrap)});
 }
 document.getElementById("btnViewGrid").onclick=()=>{svcView="grid";render()};
 document.getElementById("btnViewList").onclick=()=>{svcView="list";render()};
@@ -1558,9 +1579,21 @@ function galaxyDistScale(d){
   const t=Math.min(1,d/240);
   return 1.05-0.5*t;
 }
+/* 平移限幅（v1.10.4 改口径）：旧版 ±画布 45% 与大世界根本不兼容——127 气泡 fit 后 f≈0.24，
+   捏合放大时锚点平移可达数百 px（锚点越靠边、f 越大，平移越大），而拖拽与松手惯性都过这道
+   ±45% 限幅：捏合后一拖就被硬拽回、松手还被回弹继续拽，整群飞出画面/跳到角落（真机实证）。
+   新口径按世界包围盒与画布的关系限幅：平移后包围盒至少留 GALAXY_PAN_KEEP px 在画布内——
+   防整群被拖没，又不截断大世界下的正常大位移；包围盒比画布小的轴向区间自动收窄。 */
+const GALAXY_PAN_KEEP=64;
 function galaxyClampPan(x,y){
-  const mx=galaxyView?galaxyView.stageW*0.45:160,my=galaxyView?galaxyView.stageH*0.45:160;
-  return {x:Math.max(-mx,Math.min(mx,x)),y:Math.max(-my,Math.min(my,y))};
+  const v=galaxyView;
+  if(!v||!v.world||!v.bb)return {x,y};
+  const f=v.f;
+  let minX=GALAXY_PAN_KEEP-v.baseT.x-v.bb.x1*f,maxX=v.stageW-GALAXY_PAN_KEEP-v.baseT.x-v.bb.x0*f;
+  let minY=GALAXY_PAN_KEEP-v.baseT.y-v.bb.y1*f,maxY=v.stageH-GALAXY_PAN_KEEP-v.baseT.y-v.bb.y0*f;
+  if(minX>maxX){const m=(minX+maxX)/2;minX=m;maxX=m}
+  if(minY>maxY){const m=(minY+maxY)/2;minY=m;maxY=m}
+  return {x:Math.max(minX,Math.min(maxX,x)),y:Math.max(minY,Math.min(maxY,y))};
 }
 /* 应用视图：世界层 transform = translate(fit 平移 + 用户平移) scale(有效缩放)，全部由 JS 计算——
    世界层已改锚定 left:0/top:0 + transform-origin:0 0，屏幕映射恒为 S(p)=T+p*f，不再依赖 CSS 的
@@ -1639,6 +1672,7 @@ function galaxyAttachDrag(st){
       /* 第二指落下：捏合成立，单指拖拽立即作废（不清 suppress，捏合全程吞点击）；
          锚点在此刻冻结：两指原始坐标用同一份新鲜 rect 换算，口径与之后逐帧完全一致 */
       drag=null;vel={x:0,y:0};galaxySuppressClick=true;st.classList.remove("grabbing");
+      buzz(); /* 捏合被识别：震一下（每个手势一次，不逐帧） */
       const v=galaxyView;const r=st.getBoundingClientRect();
       const ps=[...pointers.values()].map(p=>toStage(p,r));
       const c={x:(ps[0].x+ps[1].x)/2,y:(ps[0].y+ps[1].y)/2};
@@ -1656,6 +1690,7 @@ function galaxyAttachDrag(st){
     if(!drag||e.pointerId!==drag.id)return;
     const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
     if(!drag.moved&&Math.hypot(dx,dy)<GALAXY_DRAG_THRESH)return;
+    if(!drag.moved)buzz(); /* 拖拽被识别（越过阈值）的那一刻震一下，每个手势一次 */
     drag.moved=true;st.classList.add("grabbing");
     const gh=st.querySelector(".ghint");if(gh)gh.style.opacity="0";
     const now=performance.now(),dt=Math.max(1,now-drag.lt);
@@ -1669,9 +1704,15 @@ function galaxyAttachDrag(st){
     pointers.delete(e.pointerId);
     if(pointers.size===0)galaxyGestureOn=false;
     if(pinch){
-      /* 捏合结束：不启惯性；pinch 标记保留到两指全松开（防剩余一指被误当新拖拽），
-         全松开后按老规矩把 suppress 再维持 90ms 吞掉紧随的点击 */
-      if(pointers.size===0){pinch=null;galaxySuppressClick=true;setTimeout(()=>{galaxySuppressClick=false},90)}
+      /* 捏合结束：不启惯性（捏合的速度绝不继承给惯性）；pinch 标记保留到两指全松开
+         （防剩余一指被误当新拖拽），全松开后按老规矩把 suppress 再维持 90ms 吞掉紧随的点击。
+         收尾再做一次软限幅：捏合本身按锚点换算不截断，但若结果让包围盒在画布内不足
+         GALAXY_PAN_KEEP px，就近拉回限幅内（幅度至多几十 px），保证随后的拖拽/重渲染零跳变。 */
+      if(pointers.size===0){
+        pinch=null;galaxySuppressClick=true;setTimeout(()=>{galaxySuppressClick=false},90);
+        const c=galaxyClampPan(galaxyPan.x,galaxyPan.y);
+        if(c.x!==galaxyPan.x||c.y!==galaxyPan.y){galaxyPan=c;galaxyApplyPan()}
+      }
       return;
     }
     if(!drag||e.pointerId!==drag.id)return;
@@ -1777,6 +1818,18 @@ function renderGraph(){
   const st=document.getElementById("gstage");
   if(st){
     st.onclick=e=>{if(galaxySuppressClick)return;if(galaxyHi&&(e.target===st||e.target.classList.contains("gworld")||e.target.classList.contains("gsvg"))){galaxyHi=null;render()}};
+    /* 画布填满可见高度（v1.10.4）：画布按世界 fit 出的高度常只有约 390px，画布之下的大片黑色
+       其实是页面背景——手指落在那里只会滚页面，捏合/拖动都不响应（用户实测「黑区域不算活动区」）。
+       这里把画布高度撑到 main 可见区底部（只增不减）：整块可见区域都成为手势区。
+       内容偏移按 offsetTop 链算到 main，与滚动位置无关；测不到尺寸（隐藏预渲染/桩）时跳过保持原高。 */
+    if(st.clientHeight>0){
+      const mainEl=st.closest?st.closest("main"):null;
+      if(mainEl&&mainEl.clientHeight>0){
+        let off=0,el=st;
+        while(el&&el!==mainEl){off+=el.offsetTop||0;el=el.offsetParent}
+        if(el===mainEl){const fillH=mainEl.clientHeight-off-18;if(fillH>stageH&&fillH<=1400)st.style.height=Math.round(fillH)+"px"}
+      }
+    }
     /* 落位尺寸在插入后实测画布：测不到真实尺寸（页面隐藏时预渲染、桩环境）就用回退值 provisional 落位并标 pending，
        等视图可见后的渲染（切页/尺寸变化都会再触发 render）按真实尺寸重落——v1.10.1 的教训之一（嫌疑 a）：
        回退尺寸下算出的落位曾被当正式结果锁死，切到真页面后全错。 */
@@ -1794,7 +1847,7 @@ function renderGraph(){
     }
     /* 蜂窝视图：登记世界层、fit 结果与气泡世界坐标，应用当前视图并挂手势。
        fit 平移在此直接生效，不再过 galaxyClampPan——那是拖拽限幅，会把落位平移截断（嫌疑 b）。 */
-    galaxyView={world:st.querySelector(".gworld"),fFit:galaxyFit.scale,f:galaxyFit.scale*galaxyZoom,baseT:{x:galaxyFit.tx,y:galaxyFit.ty},cx,cy,stageW:fitW,stageH:fitH,
+    galaxyView={world:st.querySelector(".gworld"),fFit:galaxyFit.scale,f:galaxyFit.scale*galaxyZoom,baseT:{x:galaxyFit.tx,y:galaxyFit.ty},cx,cy,stageW:fitW,stageH:fitH,bb,
       bubs:[...st.querySelectorAll("[data-gbub]")].map(el=>{const p=pos.get(el.dataset.gbub);return{el,x:cx+p[0],y:cy+p[1]}})};
     galaxyApplyPan();
     if(needFit&&measurable)galaxyCorrectFit(st);
@@ -1918,21 +1971,32 @@ document.getElementById("btnIdDelete").onclick=async()=>{
   detailId=null;
   document.getElementById("dlgIdDetail").close();save();
 };
-/* ---------- 回收站：恢复整卡 / 彻底删除 ---------- */
+/* ---------- 回收站：两种条目——身份卡 {identity,links} 与单个服务 {link,idnValue}（v1.10.4 起） ---------- */
 function renderTrash(){
   const box=document.getElementById("trashList");if(!box)return;
   const t=DB.trash||[];
-  box.innerHTML=t.length?t.map((e,idx)=>`<div class="svc"><div class="svc-main"><div class="nm">${esc(e.identity.value)}</div><div class="meta">${esc((ID_META[e.identity.type]||ID_META.custom).label)} · 含 ${e.links.length} 条绑定 · ${relTime(e.deletedAt)||""}删除</div></div><div class="sp"></div><div class="svc-actions"><button data-restore="${idx}" type="button">恢复</button><button data-purge="${idx}" type="button">彻底删除</button></div></div>`).join("")
-    :'<p class="hint">回收站是空的。删掉的身份卡会先来这儿躺着。</p>';
+  box.innerHTML=t.length?t.map((e,idx)=>{
+    if(e.identity)return `<div class="svc"><div class="svc-main"><div class="nm">${esc(e.identity.value)}</div><div class="meta">${esc((ID_META[e.identity.type]||ID_META.custom).label)} · 含 ${e.links.length} 条绑定 · ${relTime(e.deletedAt)||""}删除</div></div><div class="sp"></div><div class="svc-actions"><button data-restore="${idx}" type="button">恢复</button><button data-purge="${idx}" type="button">彻底删除</button></div></div>`;
+    const s=svcOf(e.link);
+    return `<div class="svc">${icoHtml(s)}<div class="svc-main"><div class="nm">${esc(s.name)}</div><div class="meta">服务${e.idnValue?" · 绑定身份 "+esc(e.idnValue):""} · ${relTime(e.deletedAt)||""}删除</div></div><div class="sp"></div><div class="svc-actions"><button data-restore="${idx}" type="button">恢复</button><button data-purge="${idx}" type="button">彻底删除</button></div></div>`;
+  }).join("")
+    :'<p class="hint">回收站是空的。删掉的身份卡和服务会先来这儿躺着。</p>';
   box.querySelectorAll("[data-restore]").forEach(b=>b.onclick=()=>{
     const e=DB.trash[+b.dataset.restore];if(!e)return;
-    if(!DB.identities.some(i=>i.id===e.identity.id))DB.identities.push(e.identity);
-    e.links.forEach(l=>{if(!DB.links.some(x=>x.id===l.id))DB.links.push(l)});
-    DB.trash.splice(+b.dataset.restore,1);save();renderTrash();toast("已恢复「"+e.identity.value+"」整卡");
+    if(e.identity){
+      if(!DB.identities.some(i=>i.id===e.identity.id))DB.identities.push(e.identity);
+      e.links.forEach(l=>{if(!DB.links.some(x=>x.id===l.id))DB.links.push(l)});
+      DB.trash.splice(+b.dataset.restore,1);save();renderTrash();toast("已恢复「"+e.identity.value+"」整卡");
+    }else if(e.link){
+      if(!DB.links.some(x=>x.id===e.link.id))DB.links.push(e.link);
+      DB.trash.splice(+b.dataset.restore,1);save();renderTrash();toast("已恢复「"+svcOf(e.link).name+"」");
+    }
   });
   box.querySelectorAll("[data-purge]").forEach(b=>b.onclick=async()=>{
     const e=DB.trash[+b.dataset.purge];if(!e)return;
-    if(!(await appConfirm("彻底删除「"+e.identity.value+"」及其 "+e.links.length+" 条绑定？这一步不能撤销。")))return;
+    const nm=e.identity?e.identity.value:svcOf(e.link).name;
+    const extra=e.identity?("及其 "+e.links.length+" 条绑定"):"";
+    if(!(await appConfirm("彻底删除「"+nm+"」"+extra+"？这一步不能撤销。")))return;
     DB.trash.splice(+b.dataset.purge,1);save();renderTrash();toast("已彻底删除");
   });
 }
@@ -2044,10 +2108,9 @@ document.getElementById("btnSvcEditGoto").onclick=()=>{const l=DB.links.find(x=>
 document.getElementById("btnSvcEditCopy").onclick=()=>{const l=DB.links.find(x=>x.id===editLinkId);if(!l)return;const idn=DB.identities.find(i=>i.id===l.identityId);copyText(l.username||(idn?idn.value:""),"账号")};
 document.getElementById("btnSvcAddAnother").onclick=()=>{const l=DB.links.find(x=>x.id===editLinkId);document.getElementById("dlgSvcEdit").close();openAddSvc(l?l.identityId:null)};
 document.getElementById("btnSvcEditDel").onclick=()=>{
-  const l=DB.links.find(x=>x.id===editLinkId);
-  snapshotUndo("已删除「"+(l?svcOf(l).name:"服务")+"」");
-  DB.links=DB.links.filter(x=>x.id!==editLinkId);editLinkId=null;
-  document.getElementById("dlgSvcEdit").close();save();
+  const id=editLinkId;editLinkId=null;
+  document.getElementById("dlgSvcEdit").close();
+  if(id)svcDel(id);   /* 收敛到 svcDel：同样进回收站 + 震动，别再各写一份删除逻辑 */
 };
 
 /* ---------- 识别引擎 ---------- */

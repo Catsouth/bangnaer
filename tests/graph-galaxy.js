@@ -367,6 +367,91 @@ const chips = doc => [...doc.querySelectorAll("[data-gchip]")];
     dom.window.close();
   }
 
+  /* ============ E 组：v1.10.4 大世界回归（127 气泡捏合 / 包围盒限幅 / 手势震动 / 画布填满） ============
+     背景：v1.10.3 真机在 127 气泡「全部」视图捏合时整群飞走。根因是 galaxyClampPan 的 ±画布 45%
+     限幅与大世界不兼容：fit 后 f≈0.28、捏合放大时锚点平移可达数百 px，捏合后一拖就被限幅硬拽回、
+     松手惯性再拽向角落。本组用等价大世界参数钉死：捏合锚点不漂、松手与重渲染不跳、拖动不被截断。 */
+  {
+    const sizeE = { w: 390, h: 390 };
+    const linksE = [];
+    for (let i = 0; i < 127; i++) linksE.push({ id: "L" + i, identityId: "e1", domain: "d" + i + ".com", name: "S" + i, username: "u", method: "密码登录", status: "active", createdAt: i + 1 });
+    const { dom } = makeDom({ ls: { "atlas-db": JSON.stringify({ identities: [{ id: "e1", type: "email", value: "a@x.com", label: "" }], links: linksE, updatedAt: 1000 }) } });
+    const win = dom.window, doc = win.document;
+    Object.defineProperty(win.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return sizeE.w; } });
+    Object.defineProperty(win.HTMLElement.prototype, "clientHeight", { configurable: true, get() { return sizeE.h; } });
+    let buzzN = 0;
+    try { Object.defineProperty(win.navigator, "vibrate", { configurable: true, value: () => { buzzN++; } }); } catch (e) {}
+    const readTf = () => {
+      const st = doc.getElementById("gstage"); if (!st) return null;
+      const world = st.querySelector(".gworld");
+      const m = (world.style.transform || "").match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/);
+      return m ? { x: +m[1], y: +m[2], s: +m[3], tf: world.style.transform } : null;
+    };
+    const pev = (type, id, x, y) => { const e = new win.MouseEvent(type, { bubbles: true, cancelable: true }); Object.defineProperties(e, { pointerId: { value: id }, clientX: { value: x }, clientY: { value: y } }); return e; };
+    await sleep(60);
+    doc.querySelectorAll(".tabbtn")[2].click(); await sleep(80);
+    ok("E 大世界：127 气泡全画出", bubs(doc).length === 127, "bubs=" + bubs(doc).length);
+    const F0 = readTf();
+    ok("E 大世界：fit 缩放很小（f<0.3，世界宽数千 px 口径）", !!F0 && F0.s < 0.3, F0 && ("f=" + F0.s));
+    const st = doc.getElementById("gstage");
+    buzzN = 0;
+    const aw = { x: (190 - F0.x) / F0.s, y: (200 - F0.y) / F0.s };
+    st.dispatchEvent(pev("pointerdown", 1, 150, 200));
+    st.dispatchEvent(pev("pointerdown", 2, 230, 200));
+    for (let i = 1; i <= 5; i++) {
+      st.dispatchEvent(pev("pointermove", 1, 150 - 8 * i, 200));
+      st.dispatchEvent(pev("pointermove", 2, 230 + 8 * i, 200));
+    }
+    const FP = readTf();
+    const ax = FP.x + aw.x * FP.s, ay = FP.y + aw.y * FP.s;
+    ok("E 大世界捏合：缩放 ≈fit×2 且锚点漂移 <1px", !!FP && Math.abs(FP.s - F0.s * 2) < 0.02 && Math.hypot(ax - 190, ay - 200) < 1,
+      FP && `f:${F0.s}->${FP.s} drift=${Math.hypot(ax - 190, ay - 200).toFixed(2)}px`);
+    ok("E 捏合成立震动一次（不逐帧）", buzzN === 1, "buzz=" + buzzN);
+    st.dispatchEvent(pev("pointerup", 2, 270, 200));
+    st.dispatchEvent(pev("pointerup", 1, 110, 200));
+    await sleep(30);
+    const FU = readTf();
+    ok("E 松手瞬间：transform 不跳变", !!FU && !!FP && FU.tf === FP.tf, FU && FU.tf);
+    win.render(); await sleep(50);
+    const FR = readTf();
+    ok("E 松手后重渲染：transform 逐字不变（落位不重算、pan/zoom 保留）", !!FR && !!FU && FR.tf === FU.tf, FR && FR.tf);
+    const cp = win.galaxyClampPan(-400, -300);
+    ok("E galaxyClampPan：大世界合法大平移 (-400,-300) 不被 ±45% 截断", cp.x === -400 && cp.y === -300, JSON.stringify(cp));
+    const cpFar = win.galaxyClampPan(-99999, 0);
+    ok("E galaxyClampPan：极端平移仍被包围盒限幅拉回（整群不许拖没）", cpFar.x > -99999 && cpFar.x < -400, JSON.stringify(cpFar));
+    buzzN = 0;
+    st.dispatchEvent(pev("pointerdown", 5, 200, 200));
+    st.dispatchEvent(pev("pointermove", 5, 215, 208));
+    await sleep(80);
+    const FD = readTf();
+    ok("E 捏合后拖动：首帧平移 = 原平移 + (15,8)（无截断跳变）",
+      !!FD && !!FR && Math.abs(FD.x - (FR.x + 15)) < 1.6 && Math.abs(FD.y - (FR.y + 8)) < 1.6,
+      FD && FR && `d=(${(FD.x - FR.x).toFixed(1)},${(FD.y - FR.y).toFixed(1)})`);
+    ok("E 拖拽被识别震动一次", buzzN === 1, "buzz=" + buzzN);
+    st.dispatchEvent(pev("pointerup", 5, 215, 208));
+    dom.window.close();
+  }
+  /* E2：画布填满可见高度——小图也要把画布撑到 main 可见区底部，整块黑区都是手势区 */
+  {
+    const sizeF = { w: 390, h: 700 };
+    const { dom } = makeDom({ ls: { "atlas-db": JSON.stringify({
+      identities: [{ id: "e1", type: "email", value: "a@x.com", label: "" }],
+      links: [
+        { id: "l1", identityId: "e1", domain: "a.com", name: "A站", username: "u1", method: "密码登录", status: "active", createdAt: 1 },
+        { id: "l2", identityId: "e1", domain: "b.com", name: "B站", username: "u1", method: "密码登录", status: "active", createdAt: 2 }
+      ], updatedAt: 1000 }) } });
+    const win = dom.window, doc = win.document;
+    Object.defineProperty(win.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return sizeF.w; } });
+    Object.defineProperty(win.HTMLElement.prototype, "clientHeight", { configurable: true, get() { return sizeF.h; } });
+    Object.defineProperty(win.HTMLElement.prototype, "offsetTop", { configurable: true, get() { return 120; } });
+    Object.defineProperty(win.HTMLElement.prototype, "offsetParent", { configurable: true, get() { return this.tagName === "MAIN" ? null : doc.querySelector("main"); } });
+    await sleep(60);
+    doc.querySelectorAll(".tabbtn")[2].click(); await sleep(60);
+    const st = doc.getElementById("gstage");
+    ok("E2 画布填满：高度撑到 main 可见区底部（700-120-18=562，而非 fit 的 336）", !!st && st.style.height === "562px", st && st.style.height);
+    dom.window.close();
+  }
+
   console.log(fails ? `\n${fails} FAIL` : "\nALL_GALAXY_TESTS_OK");
   process.exit(fails ? 1 : 0);
 })().catch(e => { console.error("ERR", e); process.exit(1); });

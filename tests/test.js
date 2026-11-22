@@ -260,6 +260,29 @@ function stubOffsets(win) {
     dom.window.close();
   }
 
+  /* ---------- H. v1.10.4 最近添加行左滑（与服务行同权：露出 ···/删除） ---------- */
+  {
+    const data = { identities: [{ id: "a1", type: "email", value: "me@example.com", label: "" }], links: [{ id: "l1", identityId: "a1", domain: "github.com", name: "GitHub", username: "u1", method: "密码登录", status: "active", createdAt: Date.now() }], trash: [], updatedAt: 9000 };
+    const { dom } = makeDom({ ls: { "atlas-db": JSON.stringify(data) } });
+    const win = dom.window, doc = win.document;
+    await sleep(60);
+    const pev = (type, id, x, y) => { const e = new win.MouseEvent(type, { bubbles: true, cancelable: true }); Object.defineProperties(e, { pointerId: { value: id }, clientX: { value: x }, clientY: { value: y } }); return e; };
+    const wrap = doc.querySelector("#recentBox .svcwrap");
+    ok("H 最近添加行已套左滑外壳 .svcwrap", !!wrap);
+    const row = wrap && wrap.querySelector(".svcbody");
+    ok("H 最近行身是 .svcbody（保留 rcard rrow 样式）", !!row && row.classList.contains("rcard") && row.classList.contains("rrow"));
+    ok("H 最近行露出层含 ··· 与删除两圆钮", !!wrap && !!wrap.querySelector(".svcreveal [data-more]") && !!wrap.querySelector(".svcreveal [data-del]"));
+    row.dispatchEvent(pev("pointerdown", 1, 300, 100));
+    row.dispatchEvent(pev("pointermove", 1, 230, 102));
+    row.dispatchEvent(pev("pointermove", 1, 170, 103));
+    row.dispatchEvent(pev("pointerup", 1, 170, 103));
+    ok("H 最近行左滑后露出（open + translateX(-148px)）", wrap.classList.contains("open") && row.style.transform.includes("translateX(-148px)"), row.style.transform);
+    wrap.querySelector("[data-del]").click(); await sleep(30);
+    const saved = JSON.parse(win.localStorage.getItem("atlas-db"));
+    ok("H 最近行删除生效且进回收站", saved.links.length === 0 && saved.trash.length === 1);
+    dom.window.close();
+  }
+
   /* ---------- G. v1.10.3 清除示例 UI 全链路（页内确认框，壳里原生 confirm 恒 false 的回归） ---------- */
   {
     const dav = JSON.stringify({ url: "https://dav.example.com/dav/atlas.json", user: "u", pass: "p" });

@@ -97,6 +97,41 @@ const LK = (iid, name, domain, extra = {}) => Object.assign({ id: "l_" + Math.ra
     win.close();
   }
 
+  /* ---------- 4b. 删服务进回收站 + 恢复 + 彻底删除（v1.10.4 全链路） ----------
+     v1.10.3 及以前的脱节：trash 只收身份卡条目，svcDel 只存撤销快照——删服务在回收站里看不到。 */
+  {
+    const gh = LK("a1", "GitHub", "github.com"), zh = LK("a1", "知乎", "zhihu.com");
+    const db = { identities: [ID("me@example.com", "email", "a1")], links: [gh, zh], trash: [], updatedAt: 5 };
+    const { win, doc } = makeDom({ ls: { "atlas-db": JSON.stringify(db) } });
+    await sleep(60);
+    doc.querySelectorAll(".tabbtn")[1].click(); await sleep(30);
+    doc.querySelector(`#appList [data-del="${gh.id}"]`).click(); await sleep(30);
+    let saved = JSON.parse(win.localStorage.getItem("atlas-db"));
+    ok("删服务进回收站：links 移除且 trash 含该服务条目", saved.links.length === 1 && saved.trash.length === 1 && !!saved.trash[0].link && saved.trash[0].link.id === gh.id, JSON.stringify(saved.trash));
+    /* 刷新重开：拿同一份已保存数据重新建页面，回收站里仍能看到刚删的服务 */
+    const ls2 = { "atlas-db": win.localStorage.getItem("atlas-db") };
+    win.close();
+    const r2 = makeDom({ ls: ls2 });
+    const win2 = r2.win, doc2 = r2.doc;
+    await sleep(60);
+    doc2.getElementById("btnTrash").click(); await sleep(20);
+    ok("刷新后回收站仍显示刚删的服务（含恢复按钮）", (doc2.getElementById("trashList").textContent || "").includes("GitHub") && !!doc2.querySelector("#trashList [data-restore]"));
+    doc2.querySelector("#trashList [data-restore]").click(); await sleep(30);
+    saved = JSON.parse(win2.localStorage.getItem("atlas-db"));
+    ok("恢复后服务回到列表且回收站移除该条目", saved.links.some(l => l.id === gh.id) && saved.trash.length === 0);
+    /* 再删 → 回收站 → 彻底删除（走页内确认框） */
+    doc2.querySelectorAll(".tabbtn")[1].click(); await sleep(30);
+    doc2.querySelector(`#appList [data-del="${gh.id}"]`).click(); await sleep(30);
+    saved = JSON.parse(win2.localStorage.getItem("atlas-db"));
+    ok("再删仍进回收站", saved.trash.length === 1 && !saved.links.some(l => l.id === gh.id));
+    doc2.getElementById("btnTrash").click(); await sleep(20);
+    doc2.querySelector("#trashList [data-purge]").click(); await sleep(30);
+    doc2.getElementById("btnConfirmOk").click(); await sleep(30);
+    saved = JSON.parse(win2.localStorage.getItem("atlas-db"));
+    ok("彻底删除后回收站清空且服务不再回来", saved.trash.length === 0 && !saved.links.some(l => l.id === gh.id));
+    win2.close();
+  }
+
   /* ---------- 5. 加身份：查重 + 格式警告 ---------- */
   {
     const db = { identities: [ID("me@example.com", "email", "a1")], links: [], updatedAt: 5 };
