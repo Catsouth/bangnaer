@@ -17,13 +17,13 @@
 
 /* Begin PBXFileReference section */
 		B10000000000000000000012 /* BindAtlas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BindAtlas.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B10000000000000000000009 /* BindAtlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindAtlasApp.swift; sourceTree = <group>; };
-		B1000000000000000000000A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = <group>; };
-		B1000000000000000000000B /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = <group>; };
-		B1000000000000000000000C /* ExportBridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ExportBridge.js; sourceTree = <group>; };
-		B1000000000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = <group>; };
-		B1000000000000000000000E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = <group>; };
-		B10000000000000000000011 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = <group>; };
+		B10000000000000000000009 /* BindAtlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindAtlasApp.swift; sourceTree = "<group>"; };
+		B1000000000000000000000A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000B /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
+		B1000000000000000000000C /* ExportBridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ExportBridge.js; sourceTree = "<group>"; };
+		B1000000000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B1000000000000000000000E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B10000000000000000000011 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
