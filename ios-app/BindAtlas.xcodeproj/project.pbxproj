@@ -10,6 +10,10 @@
 		B10000000000000000000013 /* BindAtlasApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* BindAtlasApp.swift */; };
 		B10000000000000000000014 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* ContentView.swift */; };
 		B10000000000000000000015 /* WebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* WebView.swift */; };
+		B10000000000000000000026 /* ProtoData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* ProtoData.swift */; };
+		B10000000000000000000027 /* ProtoRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* ProtoRootView.swift */; };
+		B10000000000000000000028 /* ProtoGalaxyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* ProtoGalaxyView.swift */; };
+		B10000000000000000000029 /* ProtoListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* ProtoListView.swift */; };
 		B10000000000000000000016 /* ExportBridge.js in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* ExportBridge.js */; };
 		B10000000000000000000017 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* Assets.xcassets */; };
 		B10000000000000000000018 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* Web */; };
@@ -20,6 +24,10 @@
 		B10000000000000000000009 /* BindAtlasApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindAtlasApp.swift; sourceTree = "<group>"; };
 		B1000000000000000000000A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000B /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
+		B10000000000000000000022 /* ProtoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoData.swift; sourceTree = "<group>"; };
+		B10000000000000000000023 /* ProtoRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoRootView.swift; sourceTree = "<group>"; };
+		B10000000000000000000024 /* ProtoGalaxyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoGalaxyView.swift; sourceTree = "<group>"; };
+		B10000000000000000000025 /* ProtoListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoListView.swift; sourceTree = "<group>"; };
 		B1000000000000000000000C /* ExportBridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ExportBridge.js; sourceTree = "<group>"; };
 		B1000000000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B1000000000000000000000E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -60,6 +68,10 @@
 				B10000000000000000000009 /* BindAtlasApp.swift */,
 				B1000000000000000000000A /* ContentView.swift */,
 				B1000000000000000000000B /* WebView.swift */,
+				B10000000000000000000022 /* ProtoData.swift */,
+				B10000000000000000000023 /* ProtoRootView.swift */,
+				B10000000000000000000024 /* ProtoGalaxyView.swift */,
+				B10000000000000000000025 /* ProtoListView.swift */,
 				B1000000000000000000000C /* ExportBridge.js */,
 				B1000000000000000000000D /* Info.plist */,
 				B1000000000000000000000E /* Assets.xcassets */,
@@ -143,6 +155,10 @@
 				B10000000000000000000013 /* BindAtlasApp.swift in Sources */,
 				B10000000000000000000014 /* ContentView.swift in Sources */,
 				B10000000000000000000015 /* WebView.swift in Sources */,
+				B10000000000000000000026 /* ProtoData.swift in Sources */,
+				B10000000000000000000027 /* ProtoRootView.swift in Sources */,
+				B10000000000000000000028 /* ProtoGalaxyView.swift in Sources */,
+				B10000000000000000000029 /* ProtoListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
