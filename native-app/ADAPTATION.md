@@ -547,6 +547,63 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    - 保留：分段长按弹身份列表的震动（pressTick 唯一剩余触发源，变量
      与 .impact 修饰符保留）、气泡点按与分段点按的 tapTick 选择反馈。
 
+### 第六轮细化（2026-11-23，构建号 1030 真机验收反馈，本地提交未推送）
+
+用户录屏反馈两点：153 个气泡的球拖动明显卡顿；转动有「死角」——竖直
+方向转到头就顶死（旧实现 pitch 被 clampPitch 限在 ±1.25 rad）。
+
+1. **转动改四元数 trackball，取消一切角度上限**（SphereMap.swift）
+   - 数学表示：新增 `Quat`（单位四元数，Hamilton 积 + 轴角构造 +
+     归一化 + 展开式旋转向量）。姿态状态由 `@State yaw/pitch` 改为
+     单个 `@State q: Quat`；初值 = Rx(-0.3)∘Ry(0.6)，与旧开局视角
+     （yaw 0.6、pitch -0.3）逐点一致。
+   - 拖动：增量式合成——每个 onChanged 样本按「绕屏幕空间中与拖动
+     方向垂直的轴（轴 = (dy, dx, 0)，y-up 口径下右拖绕 +Y、下拖绕
+     +X、斜拖自然合成）、角度 = 步长 × radPerPoint（0.0055 不变）」
+     生成 dq，前乘到 q 上并归一化防漂移。首样本仍只作基线不旋转
+     （承接补丁批的 minimumDistance 吸收，无跳变）。屏幕空间前乘是
+     无死角的关键：任何方向滚到底都不存在被夹住的角度。
+   - 惯性：`SphereSpin` 按新表示重写——存 q0 + 固定屏幕空间轴 +
+     初角速度 omega（分量上限 ±9、起转阈值 0.25 与旧口径一致），
+     角度按 omega·(1-exp(-1.8t))/1.8 推进（衰减常数不变），结束时
+     commitSpin 把姿态折回 q。
+   - 投影：`SphereMath.project` 改吃 Quat（内部 q.rotate 后同旧
+     focal 3.2 透视），focal/缩放/深度 alpha 口径全不变；tap 命中
+     测试与 canvas 共用同一 project + 同一 q（惯性未停时取 spin 的
+     实时姿态），点哪算哪。
+   - 删除清单：`clampPitch`、`pitchLimit`、`SphereMath.rotate(yaw:pitch:)`、
+     旧 SphereSpin 的 yaw0/vx/vy 表示、MapView 的 yaw/pitch/dragBase/
+     dragOrigin 状态。外部入口（demoFocus/onChange）只动 focus 不动
+     姿态，无影响。
+
+2. **流畅度治理（只做三件，不推翻渲染层）**（SphereMap.swift）
+   - 气泡规格缓存：`bubbles` 原为计算属性，body 每次求值（含拖动
+     每一帧）都从 index 重算，canvas/tap/groupCounts 多处重复调用。
+     改为 `@State cachedBubbles` + 静态 `computeBubbles(index)`；
+     canvas/tap/counts 统一读缓存（未填充时回退现算，保证首帧正确）。
+     刷新信号用 Store 现有机制：index 在 data 的 didSet 里同步重建，
+     故挂 `.onChange(of: store.data.accounts)` 与
+     `.onChange(of: store.data.identities)` 两个钩子（Account/Identity
+     均 Hashable）+ onAppear 首填——computeBubbles 的全部输入（账户
+     顺序、绑定、身份类型）都被覆盖；无关编辑最多多刷新一次，不会
+     出现陈旧球。
+   - 运动中降载：canvas 新增 `moving` 入参——有 drag 活跃、pinch
+     存活或 spin 播放时为 true，此时跳过气泡名称文字绘制（逐帧
+     Text 解析是 153 气泡下的一大头）；静止时恢复。连线、图标、
+     圆环照常绘制。
+   - 投影单次计算：核对 canvas 每帧每气泡只投影一次（原实现已
+     如此），tap 与 canvas 共用同一 project 函数，未引入重复投影。
+
+3. **保持不变**：深度 alpha 曲线（0.10+0.90·t^1.4）、背面不可点、
+   图标尺寸 min(1, zoom) 上限、身份聚焦只显绑定气泡、组聚焦变淡、
+   点空白清聚焦、分段与底栏等其他全部行为。
+
+4. **残余风险**：153 个图标逐帧 `ctx.draw(Image)`（含裁剪与 favicon
+   白底）是 Canvas 渲染的固有成本，本轮未动渲染层，只能靠上面三件
+   压低每帧的非绘制开销；若真机仍卡，下一步才考虑图标预合成/
+   离屏缓存。本地无 Xcode 未编译验证，待 CI 一轮确认（改动自包含
+   于 SphereMap.swift，无跨文件引用）。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

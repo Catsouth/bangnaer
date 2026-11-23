@@ -4,8 +4,9 @@ import UIKit
 // MARK: - sphere galaxy （绑哪儿第三批：关系图整页三维球形星系，替换上游双列连线图）
 //
 // The whole tab is one sphere: every account is a bubble on a Fibonacci sphere, drawn with a
-// single Canvas (150+ bubbles never become views). Drag rotates (yaw/pitch accumulate, release
-// keeps an exponentially decaying spin), pinch zooms, back-side bubbles fade/shrink and can't
+// single Canvas (150+ bubbles never become views). Drag rotates (quaternion trackball
+// since 第六轮： no Euler angles, no pitch clamp, so the ball rolls 360° in every
+// direction), pinch zooms, back-side bubbles fade/shrink and can't
 // be tapped; a front bubble tap opens the account. Bubble rims are coloured by the group of
 // the account's first bound identity: Email / SIM / 自定义 (login), grey when unbound.
 // Adding identities lives on the top-right "+" and in the legend segments'
@@ -52,6 +53,50 @@ enum SphereFocus: Equatable {
 
 struct Vec3 { var x: Double, y: Double, z: Double }
 
+/// Unit quaternion (w + xi + yj + zk): the sphere's orientation （第六轮）.
+/// Euler yaw/pitch had a hard stop — pitch was clamped to ±1.25 rad, so the
+/// ball dead-ended when rolled far enough vertically. A quaternion has no
+/// such axis limit: drag increments compose as rotations about the
+/// screen-space axis perpendicular to the drag, so the ball trackballs
+/// freely through 360° in any direction, diagonals included.
+struct Quat {
+  var w: Double, x: Double, y: Double, z: Double
+  static let identity = Quat(w: 1, x: 0, y: 0, z: 0)
+  /// Rotation of `angle` rad about `axis` (need not be unit; zero axis or
+  /// zero angle gives identity).
+  static func axisAngle(_ axis: Vec3, _ angle: Double) -> Quat {
+    let n = sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z)
+    guard n > 1e-12, angle != 0 else { return .identity }
+    let s = sin(angle / 2) / n
+    return Quat(w: cos(angle / 2), x: axis.x * s, y: axis.y * s, z: axis.z * s)
+  }
+  /// Hamilton product: `self.times(o)` applies `o` first, then `self`.
+  /// Screen-space drag increments therefore pre-multiply the committed
+  /// orientation: q = dq.times(q).
+  func times(_ o: Quat) -> Quat {
+    Quat(w: w * o.w - x * o.x - y * o.y - z * o.z,
+         x: w * o.x + x * o.w + y * o.z - z * o.y,
+         y: w * o.y - x * o.z + y * o.w + z * o.x,
+         z: w * o.z + x * o.y - y * o.x + z * o.w)
+  }
+  /// Renormalise after long composition chains so float drift never
+  /// scales the ball.
+  func normalized() -> Quat {
+    let n = sqrt(w * w + x * x + y * y + z * z)
+    guard n > 1e-12 else { return .identity }
+    return Quat(w: w / n, x: x / n, y: y / n, z: z / n)
+  }
+  /// Rotate a vector: v' = q v q*, in the expanded cross-product form.
+  func rotate(_ v: Vec3) -> Vec3 {
+    let tx = 2 * (y * v.z - z * v.y)
+    let ty = 2 * (z * v.x - x * v.z)
+    let tz = 2 * (x * v.y - y * v.x)
+    return Vec3(x: v.x + w * tx + (y * tz - z * ty),
+                y: v.y + w * ty + (z * tx - x * tz),
+                z: v.z + w * tz + (x * ty - y * tx))
+  }
+}
+
 struct SphereBubble {
   let account: Account
   let dir: Vec3
@@ -71,48 +116,57 @@ enum SphereMath {
       return Vec3(x: cos(th) * r, y: y, z: sin(th) * r)
     }
   }
-  /// yaw around Y, then pitch around X. Viewer sits at +Z: z > 0 faces the user.
-  static func rotate(_ p: Vec3, yaw: Double, pitch: Double) -> Vec3 {
-    let cy = cos(yaw), sy = sin(yaw)
-    let x1 = p.x * cy + p.z * sy, z1 = -p.x * sy + p.z * cy
-    let cp = cos(pitch), sp = sin(pitch)
-    return Vec3(x: x1, y: p.y * cp - z1 * sp, z: p.y * sp + z1 * cp)
-  }
+  /// Orient a point by the quaternion. Viewer sits at +Z: z > 0 faces the user.
+  static func rotate(_ p: Vec3, q: Quat) -> Vec3 { q.rotate(p) }
   static let focal = 3.2
-  static func project(_ p: Vec3, yaw: Double, pitch: Double, radius R: Double) -> (x: Double, y: Double, z: Double, scale: Double) {
-    let q = rotate(p, yaw: yaw, pitch: pitch)
-    let s = focal / (focal - q.z)
-    return (q.x * R * s, -q.y * R * s, q.z, s)
+  static func project(_ p: Vec3, q: Quat, radius R: Double) -> (x: Double, y: Double, z: Double, scale: Double) {
+    let r = rotate(p, q: q)
+    let s = focal / (focal - r.z)
+    return (r.x * R * s, -r.y * R * s, r.z, s)
   }
 }
 
+/// Inertia after a flick （第六轮）: the ball keeps turning about the flick's
+/// fixed screen-space axis, the angular speed decaying exponentially (the
+/// same decay constant the Euler spin used), until commitSpin folds the
+/// final orientation back into the committed quaternion.
 struct SphereSpin {
-  var yaw0: Double, pitch0: Double, vx: Double, vy: Double, start: Date
+  var q0: Quat        // committed orientation when the flick started
+  var axis: Vec3      // unit axis, screen space
+  var omega: Double   // initial angular speed, rad/s
+  var start: Date
   static let decay = 1.8
-  func rotation(at date: Date) -> (yaw: Double, pitch: Double) {
+  func orientation(at date: Date) -> Quat {
     let t = max(0, date.timeIntervalSince(start))
-    let f = (1 - exp(-Self.decay * t)) / Self.decay
-    return (yaw0 + vx * f, pitch0 + vy * f)
+    let angle = omega * (1 - exp(-Self.decay * t)) / Self.decay
+    return Quat.axisAngle(axis, angle).times(q0).normalized()
   }
   func speed(at date: Date) -> Double {
     let t = max(0, date.timeIntervalSince(start))
-    return hypot(vx, vy) * exp(-Self.decay * t)
+    return omega * exp(-Self.decay * t)
   }
 }
 
 struct MapView: View {
   @Environment(Store.self) var store
-  // committed rotation / zoom
-  @State private var yaw = 0.6
-  @State private var pitch = -0.3
+  // committed orientation / zoom （第六轮）: one unit quaternion instead of
+  // yaw/pitch — the initial value reproduces the old yaw 0.6 then pitch -0.3
+  // tilt (Rx(-0.3) ∘ Ry(0.6)) so the ball opens at the same angle as before.
+  @State private var q = Quat.axisAngle(Vec3(x: 1, y: 0, z: 0), -0.3)
+    .times(Quat.axisAngle(Vec3(x: 0, y: 1, z: 0), 0.6)).normalized()
   @State private var zoom: CGFloat = 1
   // gesture bookkeeping
-  @State private var dragBase: (yaw: Double, pitch: Double)? = nil
-  @State private var dragOrigin: CGSize = .zero
+  @State private var dragActive = false
   @State private var dragLast: (date: Date, t: CGSize)? = nil
   @State private var dragVel: CGSize = .zero
   @State private var pinchBase: CGFloat? = nil
   @State private var spin: SphereSpin? = nil
+  // Bubble specs are computed once and cached （第六轮）: body re-evaluates on
+  // every drag frame, and rebuilding 150+ specs (plus groupCounts re-deriving
+  // them) each time was a standing per-frame cost. The cache refreshes when
+  // the store's accounts/identities actually change (see the onChange hooks
+  // in body); before the first refresh lands, reads fall back to computing.
+  @State private var cachedBubbles: [SphereBubble]? = nil
   // interaction feedback / menus
   @State private var focus: SphereFocus? = nil
   @State private var groupSheet: SphereGroup? = nil
@@ -122,18 +176,19 @@ struct MapView: View {
   @State private var iconTick = 0
   @Namespace private var segNS
 
-  static let pitchLimit = 1.25
   static let radPerPoint = 0.0055
 
-  var bubbles: [SphereBubble] {
-    let accs = store.index.byName
+  var bubbles: [SphereBubble] { cachedBubbles ?? Self.computeBubbles(store.index) }
+  static func computeBubbles(_ index: AtlasIndex) -> [SphereBubble] {
+    let accs = index.byName
     let dirs = SphereMath.directions(accs.count)
     return accs.enumerated().map { k, a in
-      let first = a.identityIds.lazy.compactMap { store.index.identityByID[$0] }.first
+      let first = a.identityIds.lazy.compactMap { index.identityByID[$0] }.first
       let r = min(24, 13 + 4.5 * sqrt(Double(a.identityIds.count)))
       return SphereBubble(account: a, dir: dirs[k], baseR: r, group: SphereGroup.of(first))
     }
   }
+  func refreshBubbles() { cachedBubbles = Self.computeBubbles(store.index) }
   var groupCounts: [SphereGroup: Int] {
     var out: [SphereGroup: Int] = [:]
     for b in bubbles { out[b.group, default: 0] += 1 }
@@ -173,7 +228,7 @@ struct MapView: View {
       .sensoryFeedback(.selection, trigger: tapTick)
       .sensoryFeedback(.impact(weight: .light), trigger: pressTick)
     }
-    .onAppear { iconTick &+= 1 }
+    .onAppear { refreshBubbles(); iconTick &+= 1 }
     .task {
       // icons keep landing for a moment after the tab opens (favicons); one delayed
       // repaint picks them up — during a spin the canvas repaints anyway
@@ -183,6 +238,13 @@ struct MapView: View {
     .onChange(of: store.demoFocus) { _, f in
       withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
+    // Bubble-spec cache invalidation （第六轮）: the index rebuilds inside
+    // data's didSet, so when these fire the fresh index is already in place.
+    // Accounts + identities cover everything computeBubbles reads (account
+    // order, bindings, identity types); an unrelated edit may refresh the
+    // cache once extra — a rare spare rebuild, never a stale ball.
+    .onChange(of: store.data.accounts) { _, _ in refreshBubbles() }
+    .onChange(of: store.data.identities) { _, _ in refreshBubbles() }
     .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
       GroupIdentitiesSheet(group: g,
                            onPick: { i in
@@ -205,12 +267,11 @@ struct MapView: View {
     let specs = bubbles
     if let spin {
       TimelineView(.animation) { ctx in
-        let ang = spin.rotation(at: ctx.date)
-        canvas(specs: specs, size: size, yaw: ang.yaw, pitch: clampPitch(ang.pitch))
+        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date), moving: true)
       }
       .task(id: spin.start) {
         // the ViewBuilder above can't run side effects, so spin-end detection
-        // lives here: poll the captured spin's decay, then fold it into yaw/pitch
+        // lives here: poll the captured spin's decay, then fold it into q
         let mine = spin
         while !Task.isCancelled {
           if mine.speed(at: Date()) < 0.06 {
@@ -221,11 +282,14 @@ struct MapView: View {
         }
       }
     } else {
-      canvas(specs: specs, size: size, yaw: yaw, pitch: pitch)
+      // moving （第六轮）: while a drag / pinch / spin is live the canvas
+      // skips the per-bubble name labels — resolved Text drawing is one of
+      // the big per-frame costs at 150+ bubbles; labels return at rest.
+      canvas(specs: specs, size: size, q: q, moving: dragActive || pinchBase != nil)
     }
   }
 
-  func canvas(specs: [SphereBubble], size: CGSize, yaw: Double, pitch: Double) -> some View {
+  func canvas(specs: [SphereBubble], size: CGSize, q: Quat, moving: Bool) -> some View {
     let _ = iconTick
     return Canvas { ctx, _ in
       let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
@@ -240,7 +304,7 @@ struct MapView: View {
       // their normal size — positions still project with the real zoom (patch batch).
       let iconScale = min(1.0, Double(zoom))
       var ps: [P] = specs.map { b in
-        let p = SphereMath.project(b.dir, yaw: yaw, pitch: pitch, radius: R)
+        let p = SphereMath.project(b.dir, q: q, radius: R)
         let t = (p.z + 1) / 2
         let r = b.baseR * CGFloat(p.scale) * CGFloat(0.7 + 0.3 * t) * CGFloat(iconScale)
         return P(b: b, c: CGPoint(x: center.x + CGFloat(p.x), y: center.y + CGFloat(p.y)), r: r, z: p.z)
@@ -297,8 +361,10 @@ struct MapView: View {
                    at: item.c, anchor: .center)
         }
         ctx.stroke(Path(ellipseIn: rect), with: .color(item.b.group.color.opacity(alpha)), lineWidth: 1.5)
-        // name under the bigger front bubbles
-        if item.r >= 16 && item.z > 0.1 {
+        // name under the bigger front bubbles — skipped while the ball is
+        // moving （第六轮）: per-frame Text resolution is a major cost at
+        // this bubble count, and nobody reads labels mid-fling anyway
+        if !moving && item.r >= 16 && item.z > 0.1 {
           ctx.draw(Text(item.b.account.name).font(.system(size: 9, weight: .medium)).foregroundStyle(.primary.opacity(alpha)),
                    at: CGPoint(x: item.c.x, y: item.c.y + item.r + 8), anchor: .center)
         }
@@ -312,38 +378,50 @@ struct MapView: View {
   var dragGesture: some Gesture {
     DragGesture(minimumDistance: 4)
       .onChanged { v in
-        if dragBase == nil {
+        if !dragActive {
           commitSpin()
-          dragBase = (yaw, pitch)
-          // The drag only starts past its minimum distance; absorbing that
-          // first stretch keeps the ball from jumping when rotation kicks in
-          // (patch batch).
-          dragOrigin = v.translation
+          dragActive = true
+          // The drag only starts past its minimum distance; swallowing that
+          // first sample (no rotation, just the baseline) keeps the ball
+          // from jumping when rotation kicks in (patch batch).
           dragVel = .zero
-          dragLast = nil
+          dragLast = (v.time, v.translation)
+          return
         }
-        let b = dragBase!
-        let t = CGSize(width: v.translation.width - dragOrigin.width, height: v.translation.height - dragOrigin.height)
-        yaw = b.yaw + Double(t.width) * Self.radPerPoint
-        pitch = clampPitch(b.pitch + Double(t.height) * Self.radPerPoint)
-        if let last = dragLast {
-          let dt = v.time.timeIntervalSince(last.date)
-          if dt > 0.016 {
-            dragVel = CGSize(width: (t.width - last.t.width) / CGFloat(dt),
-                             height: (t.height - last.t.height) / CGFloat(dt))
-          }
+        let last = dragLast!
+        let dx = Double(v.translation.width - last.t.width)
+        let dy = Double(v.translation.height - last.t.height)
+        if dx != 0 || dy != 0 {
+          // Trackball increment （第六轮）: rotate about the screen-space
+          // axis perpendicular to this step's drag direction — (dy, dx)
+          // because project() works in y-up space: a rightward step turns
+          // about +Y, a downward step about +X, a diagonal step about the
+          // blend, so the front of the ball follows the finger exactly.
+          // Pre-multiplying (screen-space axis) onto the committed q is
+          // what makes the roll unlimited: no angle is ever clamped.
+          let dq = Quat.axisAngle(Vec3(x: dy, y: dx, z: 0), hypot(dx, dy) * Self.radPerPoint)
+          q = dq.times(q).normalized()
         }
-        dragLast = (v.time, t)
+        let dt = v.time.timeIntervalSince(last.date)
+        if dt > 0.016 {
+          dragVel = CGSize(width: (v.translation.width - last.t.width) / CGFloat(dt),
+                           height: (v.translation.height - last.t.height) / CGFloat(dt))
+        }
+        dragLast = (v.time, v.translation)
       }
       .onEnded { _ in
-        dragBase = nil
+        dragActive = false
         dragLast = nil
-        let vx = Double(dragVel.width) * Self.radPerPoint
-        let vy = Double(dragVel.height) * Self.radPerPoint
-        if hypot(vx, vy) > 0.25 {
+        // Flick → inertia about a fixed axis: the horizontal rate turns
+        // about Y, the vertical rate about X (same component caps and
+        // start threshold the Euler spin had).
+        let wy = min(max(Double(dragVel.width) * Self.radPerPoint, -9), 9)
+        let wx = min(max(Double(dragVel.height) * Self.radPerPoint, -9), 9)
+        let omega = hypot(wx, wy)
+        if omega > 0.25 {
           // no haptic on spin start （第五轮）: sliding the ball stays silent;
           // pressTick now belongs only to the segment long-press.
-          spin = SphereSpin(yaw0: yaw, pitch0: pitch, vx: min(max(vx, -9), 9), vy: min(max(vy, -9), 9), start: Date())
+          spin = SphereSpin(q0: q, axis: Vec3(x: wx / omega, y: wy / omega, z: 0), omega: omega, start: Date())
         }
       }
   }
@@ -360,15 +438,16 @@ struct MapView: View {
   }
 
   func tap(at loc: CGPoint, in size: CGSize) {
-    let ang: (yaw: Double, pitch: Double)
-    if let spin { ang = spin.rotation(at: Date()) } else { ang = (yaw, pitch) }
+    // hit-testing projects through the very same quaternion the canvas is
+    // showing (the live spin orientation while a flick is still decaying)
+    let qNow = spin?.orientation(at: Date()) ?? q
     let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
     let R = Double(min(size.width, size.height)) * 0.40 * Double(zoom)
     var best: (id: String, z: Double)? = nil
     for b in bubbles {
       // identity focus （第五轮）: hidden bubbles are not tappable either
       if let f = focus, case .identity(let fid) = f, !b.account.identityIds.contains(fid) { continue }
-      let p = SphereMath.project(b.dir, yaw: ang.yaw, pitch: clampPitch(ang.pitch), radius: R)
+      let p = SphereMath.project(b.dir, q: qNow, radius: R)
       guard p.z > -0.05 else { continue }   // back side can't be tapped
       let t = (p.z + 1) / 2
       // same radius the canvas draws with (incl. the min(1, zoom) icon cap), + slack
@@ -388,12 +467,9 @@ struct MapView: View {
 
   func commitSpin() {
     guard let s = spin else { return }
-    let ang = s.rotation(at: Date())
-    yaw = ang.yaw
-    pitch = clampPitch(ang.pitch)
+    q = s.orientation(at: Date())
     spin = nil
   }
-  func clampPitch(_ p: Double) -> Double { min(Self.pitchLimit, max(-Self.pitchLimit, p)) }
 
   // MARK: legend
 
