@@ -58,6 +58,10 @@ struct SettingsSheet: View {
           }
         }
         Section {
+          NavigationLink { RebindView() } label: { Label("换绑清单", systemImage: "arrow.left.arrow.right") }
+          NavigationLink { HealthView() } label: { Label("账号体检", systemImage: "stethoscope") }
+        } footer: { Text("换了手机号或邮箱时，用换绑清单逐个确认新绑定；账号体检帮你找出重复、遗漏和已失效的记录。") }
+        Section {
           Button { doc = BackupDoc(data: store.backupJSON()); exporting = true } label: { Label("导出备份", systemImage: "square.and.arrow.up") }
           Button { importing = true } label: { Label("导入备份", systemImage: "square.and.arrow.down") }
           NavigationLink { SmartImportView() } label: { Label("智能导入", systemImage: "sparkles") }

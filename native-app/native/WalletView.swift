@@ -14,7 +14,7 @@ struct WalletView: View {
           dots.padding(.top, 2)
           AppGrid().padding(.horizontal, 20).padding(.top, 26)
           Timeline().padding(.horizontal, 20).padding(.top, 34)
-          Color.clear.frame(height: 40)
+          Color.clear.frame(height: 96)   // clearance for the floating bottom bar
         }
       }
       .scrollIndicators(.hidden)
@@ -95,24 +95,20 @@ struct Glow: View {
   }
 }
 
+/// Top bar of the three main tabs: only the + menu stays (third batch UI rule).
+/// The moon (theme) moved into 设置 → 外观 (the picker already lived there; the quick
+/// toggle is gone so settings is the single home), and the … button that opened the
+/// settings sheet is replaced by the settings button in the floating bottom bar.
 struct TopButtons: ToolbarContent {
   @Environment(Store.self) var store
   var body: some ToolbarContent {
-    ToolbarItemGroup(placement: .topBarTrailing) {
-      Button {
-        ThemeFX.set(store.theme == "light" ? "dark" : "light", store: store)
-      } label: {
-        Image(systemName: store.theme == "light" ? "moon.fill" : "sun.max.fill")
-          .contentTransition(.symbolEffect(.replace.downUp))
-          .background(ThemeOrigin())
-      }
+    ToolbarItem(placement: .topBarTrailing) {
       Menu {
         Button { store.route = .picker(store.active?.id) } label: { Label("添加网站或 App", systemImage: "square.grid.2x2") }
         Button { store.route = .newIdentity("email") } label: { Label("添加邮箱", systemImage: "envelope") }
         Button { store.route = .newIdentity("phone") } label: { Label("添加手机号", systemImage: "simcard") }
         Button { store.route = .newIdentity("login") } label: { Label("添加登录账号", systemImage: "person.badge.key") }
       } label: { Image(systemName: "plus") }
-      Button { store.route = .settings } label: { Image(systemName: "ellipsis") }
     }
   }
 }

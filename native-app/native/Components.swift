@@ -516,6 +516,18 @@ struct IdentityCaps: View {
   }
 }
 
+/// Service status pill （停用 orange / 已注销 red); active services don't wear one.
+struct StatusBadge: View {
+  let status: String   // canonical key: "stopped" | "cancelled"
+  var body: some View {
+    Text(BindInfo.statusLabel(status))
+      .font(.system(size: 10, weight: .bold))
+      .foregroundStyle(.white)
+      .padding(.horizontal, 6).padding(.vertical, 2)
+      .background(status == "cancelled" ? Color.red : Color.orange, in: Capsule())
+  }
+}
+
 struct ReelRow: View {
   @Environment(Store.self) var store
   let account: Account
@@ -528,8 +540,12 @@ struct ReelRow: View {
         HStack(spacing: 6) {
           Text(a.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
           if let h = a.handle { Text(store.handleText(h)).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
+          if a.bindStatusKey != "active" { StatusBadge(status: a.bindStatusKey) }
         }
-        IdentityCaps(ids: a.identityIds)
+        HStack(spacing: 6) {
+          IdentityCaps(ids: a.identityIds)
+          if let m = a.bindMethodLabel { Text(m).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1) }
+        }
       }
       Spacer(minLength: 4)
       if let meta { Text(meta).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary) }

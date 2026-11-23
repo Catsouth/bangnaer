@@ -227,6 +227,81 @@ struct Account: Codable, Identifiable, Hashable {
   }
 }
 
+// MARK: - login method / service status (绑哪儿：存 Account.extra 的 bindMethod / bindStatus)
+//
+// The web app keeps a per-binding login method and status; the converter carried them into
+// Account.extra as "bindMethod" / "bindStatus". Two spellings exist in the wild: the web app
+// writes Chinese method labels （密码登录 / Google 授权 / …) while the canonical keys are
+// English (password / google / …); statuses are English keys on both sides. Reads normalize
+// both spellings to the canonical key; writes always store the canonical key. Every other
+// extra key is left untouched, so the round trip to the web app loses nothing.
+
+enum BindInfo {
+  /// canonical method keys in display order ("" in pickers means 未标注）
+  static let methods: [(key: String, label: String)] = [
+    ("password", "密码登录"),
+    ("wechat", "微信授权"),
+    ("apple", "Apple"),
+    ("google", "Google"),
+    ("qq", "QQ"),
+    ("sms", "短信验证码"),
+    ("other", "其它"),
+  ]
+  static let statuses: [(key: String, label: String)] = [
+    ("active", "正常"),
+    ("stopped", "停用"),
+    ("cancelled", "已注销"),
+  ]
+  private static let methodAliases: [String: String] = [
+    "password": "password", "密码登录": "password", "密码": "password",
+    "wechat": "wechat", "微信授权": "wechat", "微信": "wechat", "微信登录": "wechat",
+    "apple": "apple", "Apple": "apple", "Apple 授权": "apple", "Apple授权": "apple", "Apple 登录": "apple",
+    "google": "google", "Google": "google", "Google 授权": "google", "Google授权": "google", "Google 登录": "google",
+    "qq": "qq", "QQ": "qq", "QQ 授权": "qq", "QQ授权": "qq", "QQ 登录": "qq",
+    "sms": "sms", "手机号验证码": "sms", "短信验证码": "sms", "验证码": "sms",
+    "other": "other", "其它": "other", "其他": "other",
+  ]
+  private static let statusAliases: [String: String] = [
+    "active": "active", "在用": "active", "正常": "active",
+    "stopped": "stopped", "已停用": "stopped", "停用": "stopped",
+    "cancelled": "cancelled", "已注销": "cancelled", "注销": "cancelled",
+  ]
+  static func methodKey(_ raw: String?) -> String? {
+    guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+    let t = raw.trimmingCharacters(in: .whitespaces)
+    return methodAliases[t] ?? methodAliases[t.lowercased()] ?? t   // unknown spellings pass through as their own key
+  }
+  static func methodLabel(_ key: String?) -> String? {
+    guard let key else { return nil }
+    return methods.first { $0.key == key }?.label ?? key
+  }
+  static func statusKey(_ raw: String?) -> String {
+    guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return "active" }
+    let t = raw.trimmingCharacters(in: .whitespaces)
+    return statusAliases[t] ?? statusAliases[t.lowercased()] ?? "active"
+  }
+  static func statusLabel(_ key: String) -> String { statuses.first { $0.key == key }?.label ?? "正常" }
+}
+
+extension Account {
+  /// raw extra string for a key (nil when absent / not a string)
+  func extraString(_ key: String) -> String? {
+    if case .string(let s) = extra[key] ?? .null { return s }
+    return nil
+  }
+  /// canonical login-method key (password/wechat/apple/google/qq/sms/other), nil = 未标注
+  var bindMethodKey: String? { BindInfo.methodKey(extraString("bindMethod")) }
+  var bindMethodLabel: String? { BindInfo.methodLabel(bindMethodKey) }
+  /// canonical status key: active / stopped / cancelled (missing counts as active)
+  var bindStatusKey: String { BindInfo.statusKey(extraString("bindStatus")) }
+  var bindStatusLabel: String { BindInfo.statusLabel(bindStatusKey) }
+  /// the web app's per-link rebind flag, carried by the converter as extra.bindRebindDone
+  var legacyRebindDone: Bool {
+    if case .bool(let b) = extra["bindRebindDone"] ?? .null { return b }
+    return false
+  }
+}
+
 struct AtlasData: Codable {
   var identities: [Identity] = []
   var accounts: [Account] = []
@@ -236,8 +311,12 @@ struct AtlasData: Codable {
   /// until restored or purged. Missing in old data / other clients' files -> empty; unknown to
   /// older clients it is just an extra key they keep via their own forward-compat handling.
   var trash: [TrashEntry] = []
-  init(identities: [Identity] = [], accounts: [Account] = [], deleted: [String: Double] = [:], demo: Bool? = nil, trash: [TrashEntry] = []) {
-    self.identities = identities; self.accounts = accounts; self.deleted = deleted; self.demo = demo; self.trash = trash
+  /// 换绑清单 progress (绑哪儿 third batch): "accountId|identityId" pairs the user has
+  /// re-bound after changing a phone number / email. A set semantically; stored as an array
+  /// for JSON simplicity, merged by union in Sync.merge. Missing in old data -> empty.
+  var rebindDone: [String] = []
+  init(identities: [Identity] = [], accounts: [Account] = [], deleted: [String: Double] = [:], demo: Bool? = nil, trash: [TrashEntry] = [], rebindDone: [String] = []) {
+    self.identities = identities; self.accounts = accounts; self.deleted = deleted; self.demo = demo; self.trash = trash; self.rebindDone = rebindDone
   }
   init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
@@ -246,6 +325,7 @@ struct AtlasData: Codable {
     deleted = (try? c.decode([String: Double].self, forKey: .deleted)) ?? [:]
     demo = try? c.decode(Bool.self, forKey: .demo)
     trash = (try? c.decode([TrashEntry].self, forKey: .trash)) ?? []
+    rebindDone = (try? c.decode([String].self, forKey: .rebindDone)) ?? []
   }
 }
 
@@ -305,7 +385,7 @@ struct Toast: Identifiable, Equatable {
 }
 
 enum Route: Identifiable, Equatable {
-  case identity(String), account(String), newIdentity(String), editIdentity(String), editAccount(String), picker(String?), settings
+  case identity(String), account(String), newIdentity(String), editIdentity(String), editAccount(String), picker(String?), settings, search
   var id: String {
     switch self {
     case .identity(let s): return "i" + s
@@ -315,6 +395,7 @@ enum Route: Identifiable, Equatable {
     case .editAccount(let s): return "ea" + s
     case .picker(let s): return "p" + (s ?? "")
     case .settings: return "s"
+    case .search: return "q"
     }
   }
 }

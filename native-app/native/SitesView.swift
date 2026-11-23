@@ -3,6 +3,7 @@ import SwiftUI
 struct SitesView: View {
   @Environment(Store.self) var store
   @State private var cat = "全部"
+  @State private var statusFilter = "all"   // all | active | stopped | cancelled (BindInfo keys)
   @State private var query = ""
 
   var body: some View {
@@ -11,6 +12,7 @@ struct SitesView: View {
         VStack(alignment: .leading, spacing: 0) {
           if store.data.accounts.isEmpty { empty } else {
             chips.padding(.top, 4)
+            statusChips.padding(.top, 10)
             let groups = sections
             LazyVStack(alignment: .leading, spacing: 8, pinnedViews: []) {
               ForEach(groups, id: \.self) { c in
@@ -28,8 +30,9 @@ struct SitesView: View {
             }
             .padding(.horizontal, 16)
             .animation(Motion.smooth, value: cat)
+            .animation(Motion.smooth, value: statusFilter)
           }
-          Color.clear.frame(height: 30)
+          Color.clear.frame(height: 96)   // clearance for the floating bottom bar
         }
       }
       .scrollIndicators(.hidden)
@@ -48,7 +51,8 @@ struct SitesView: View {
       || a.identityIds.compactMap { store.identity($0) }.contains { $0.value.lowercased().contains(q) || $0.label.lowercased().contains(q) }
   }
   func sectionItems(_ c: String) -> [Account] {
-    let all = store.index.byCategory[c] ?? []
+    var all = store.index.byCategory[c] ?? []
+    if statusFilter != "all" { all = all.filter { $0.bindStatusKey == statusFilter } }
     let q = query_
     return q.isEmpty ? all : all.filter { matches($0, q) }
   }
@@ -72,6 +76,35 @@ struct SitesView: View {
     }
     .scrollIndicators(.hidden)
     .sensoryFeedback(.selection, trigger: cat)
+  }
+
+  // status filter row: 全部 / 正常 / 停用 / 已注销， counts over every account
+  var statusChips: some View {
+    let counts: [String: Int] = [
+      "active": store.data.accounts.filter { $0.bindStatusKey == "active" }.count,
+      "stopped": store.data.accounts.filter { $0.bindStatusKey == "stopped" }.count,
+      "cancelled": store.data.accounts.filter { $0.bindStatusKey == "cancelled" }.count,
+    ]
+    return ScrollView(.horizontal) {
+      HStack(spacing: 8) {
+        ForEach([("all", "全部", store.data.accounts.count)] + BindInfo.statuses.map { ($0.key, $0.label, counts[$0.key] ?? 0) }, id: \.0) { o in
+          let on = statusFilter == o.0
+          Button { withAnimation(Motion.snappy) { statusFilter = o.0 } } label: {
+            HStack(spacing: 4) {
+              if o.0 == "stopped" || o.0 == "cancelled" { Circle().fill(o.0 == "cancelled" ? Color.red : Color.orange).frame(width: 7, height: 7) }
+              Text(o.1)
+              Text("\(o.2)").foregroundStyle(on ? Color.white.opacity(0.75) : Color.secondary)
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 11).frame(height: 28)
+            .foregroundStyle(on ? Color.white : Color.primary)
+            .background(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.glass), in: Capsule())
+          }.buttonStyle(PressStyle(scale: 0.94))
+        }
+      }.padding(.horizontal, 16)
+    }
+    .scrollIndicators(.hidden)
+    .sensoryFeedback(.selection, trigger: statusFilter)
   }
 
   var empty: some View {

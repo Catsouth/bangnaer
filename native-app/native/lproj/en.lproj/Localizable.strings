@@ -33,3 +33,37 @@
 "只选高置信" = "High Confidence Only";
 "先不绑" = "Don't Bind";
 "自动识别" = "Auto-recognized";
+
+/* Batch 3: Sphere galaxy / login method & status / rebind checklist / health check / search */
+"换绑清单" = "Rebind Checklist";
+"账号体检" = "Account Checkup";
+"选择身份" = "Choose Identity";
+"进度" = "Progress";
+"全部换绑完成" = "All Rebound";
+"前往登录" = "Go to Log In";
+"复制账号" = "Copy Account";
+"已复制账号" = "Account Copied";
+"登录方式" = "Login Method";
+"状态" = "Status";
+"未标注" = "Not Set";
+"登录方式与状态" = "Login Method & Status";
+"正常" = "Active";
+"停用" = "Stopped";
+"已注销" = "Cancelled";
+"密码登录" = "Password";
+"微信授权" = "WeChat";
+"短信验证码" = "SMS Code";
+"自定义" = "Custom";
+"搜索" = "Search";
+"一切正常" = "All Good";
+"添加身份" = "Add Identity";
+"添加邮箱" = "Add Email";
+"添加手机号" = "Add Phone Number";
+"添加登录账号" = "Add Login Account";
+"重复绑定同一身份的服务" = "Services with Duplicate Bindings";
+"没有绑定任何身份的服务" = "Services with No Identity Bound";
+"没有绑任何服务的身份卡" = "Identity Cards with No Services";
+"已停用 / 已注销的服务" = "Stopped / Cancelled Services";
+"缺少域名的服务" = "Services Missing a Domain";
+"值重复的身份卡" = "Identity Cards with Duplicate Values";
+"这个身份还没有绑定的服务。" = "No services are bound to this identity yet.";

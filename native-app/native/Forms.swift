@@ -241,6 +241,8 @@ struct AccountForm: View {
   @State private var handle: String
   @State private var notes: String
   @State private var ids: [String]
+  @State private var method: String   // canonical BindInfo key, "" = 未标注 (extra.bindMethod)
+  @State private var status: String   // canonical BindInfo key (extra.bindStatus)
   @State private var icon: String?
   @State private var art: String? = nil          // App Store artwork shown while its icon downloads
   @State private var iconJob = 0                 // newest icon change wins over a slower download
@@ -256,7 +258,17 @@ struct AccountForm: View {
     _name = State(initialValue: existing.name); _domain = State(initialValue: existing.domain)
     _category = State(initialValue: existing.category); _handle = State(initialValue: existing.handle ?? "")
     _notes = State(initialValue: existing.notes); _ids = State(initialValue: existing.identityIds)
+    _method = State(initialValue: existing.bindMethodKey ?? "")
+    _status = State(initialValue: existing.bindStatusKey)
     _icon = State(initialValue: existing.icon)
+  }
+
+  /// picker rows for 登录方式： 未标注 + the canonical keys; an unknown spelling already in
+  /// the data rides along as its own row so saving never silently rewrites it
+  var methodOptions: [(key: String, label: String)] {
+    var opts = [(key: "", label: "未标注")] + BindInfo.methods
+    if let k = existing.bindMethodKey, !BindInfo.methods.contains(where: { $0.key == k }) { opts.append((key: k, label: k)) }
+    return opts
   }
 
   var query: String { typed && nameFocused ? name.trimmingCharacters(in: .whitespaces) : "" }
@@ -315,6 +327,14 @@ struct AccountForm: View {
             IdentityToggles(selected: $ids, login: true)
           } header: { Text("第三方登录") } footer: { Text("选上表示这个网站用它登录。") }
         }
+        Section {
+          Picker("登录方式", selection: $method) {
+            ForEach(methodOptions, id: \.key) { o in Text(o.label).tag(o.key) }
+          }
+          Picker("状态", selection: $status) {
+            ForEach(BindInfo.statuses, id: \.key) { o in Text(o.label).tag(o.key) }
+          }
+        } header: { Text("登录方式与状态") } footer: { Text("和网页版通用：登录方式、状态存在服务的附加信息里。") }
         Section("备注") { TextField("两步验证、找回方式…", text: $notes, axis: .vertical).lineLimit(2...6) }
       }
       .animation(Motion.snappy, value: presetHits.count + storeHits.count)
@@ -348,6 +368,10 @@ struct AccountForm: View {
                 let h = handle.trimmingCharacters(in: .whitespaces); s.accounts[k].handle = h.isEmpty ? nil : h
                 s.accounts[k].identityIds = ids
                 s.accounts[k].icon = icon
+                // login method / status live in extra (web-app keys); other extra keys untouched
+                if method.isEmpty { s.accounts[k].extra.removeValue(forKey: "bindMethod") }
+                else { s.accounts[k].extra["bindMethod"] = .string(method) }
+                s.accounts[k].extra["bindStatus"] = .string(status)
               }
             }
             IconStore.shared.prefetch(store.data.accounts.filter { $0.id == existing.id })

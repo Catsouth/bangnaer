@@ -25,5 +25,18 @@
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>NSFaceIDUsageDescription</key><string>用于解锁绑哪儿</string>
+  <!-- 「用绑哪儿打开」: a backup JSON handed over from Files / share sheet arrives via
+       onOpenURL and goes through Store.importBackup. Viewer role + Alternate rank: we
+       only read the file, never write it back, and don't claim to be the default JSON app. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>绑哪儿备份</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.json</string><string>public.data</string></array>
+    </dict>
+  </array>
+  <key>LSSupportsOpeningDocumentsInPlace</key><true/>
 </dict>
 </plist>

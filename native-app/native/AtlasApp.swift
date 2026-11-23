@@ -51,6 +51,25 @@ struct AtlasApp: App {
           break
         }
       }
+      // 「用绑哪儿打开」: backup files handed over from Files / share sheet (the system
+      // file picker has repeatedly refused valid JSON on device, so this is the
+      // reliable way in). Only backup import — smart-import formats are not handled here.
+      .onOpenURL { url in openBackup(url) }
+    }
+  }
+
+  /// Reads a document handed to the app and feeds it to the same import the settings
+  /// page uses. In-place documents are security-scoped: start/stop around the read,
+  /// and still try the read when access wasn't granted (copied-to-Inbox URLs need none).
+  /// Feedback is the existing toasts: importBackup announces the counts on success,
+  /// anything unreadable or not a backup gets 「这不是绑哪儿的备份文件」.
+  func openBackup(_ url: URL) {
+    guard url.isFileURL else { return }
+    let scoped = url.startAccessingSecurityScopedResource()
+    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+    guard let d = try? Data(contentsOf: url), store.importBackup(d) else {
+      store.show("这不是绑哪儿的备份文件")
+      return
     }
   }
 }
@@ -59,6 +78,7 @@ struct RootView: View {
   @Environment(Store.self) var store
   @State private var tab = 0
   @State private var dir: CGFloat = 1
+  @Namespace private var barNS
 
   var body: some View {
     TabView(selection: Binding(get: { tab }, set: { t in dir = t >= tab ? 1 : -1; tab = t })) {
@@ -66,6 +86,11 @@ struct RootView: View {
       SitesView().tabEnter(1, tab: tab, dir: dir).tag(1).tabItem { Label("全部 App", systemImage: "square.grid.2x2.fill") }
       MapView().tabEnter(2, tab: tab, dir: dir).tag(2).tabItem { Label("关系图", systemImage: "point.3.connected.trianglepath.dotted") }
     }
+    // system tab bar hidden; the floating glass bar below replaces it (iOS 27 style:
+    // liquid-glass capsule + separate round search / settings buttons, approximated
+    // with ultraThinMaterial + highlight stroke + soft shadow on the iOS 17 target)
+    .toolbar(.hidden, for: .tabBar)
+    .overlay(alignment: .bottom) { bottomBar }
     .environment(\.selectedTab, tab)
     .sensoryFeedback(.selection, trigger: tab)
     .onChange(of: store.theme) { _, t in ThemeFX.apply(t) }
@@ -125,6 +150,113 @@ struct RootView: View {
       .presentationDragIndicator(.visible)
       .presentationCornerRadius(34)
   }
+
+  // MARK: floating bottom bar
+
+  var bottomBar: some View {
+    HStack(alignment: .center, spacing: 10) {
+      HStack(spacing: 2) {
+        barTab(0, "卡包", "rectangle.stack.fill")
+        barTab(1, "全部 App", "square.grid.2x2.fill")
+        barTab(2, "关系图", "point.3.connected.trianglepath.dotted")
+      }
+      .padding(4)
+      .background { glassCapsule }
+      Spacer(minLength: 0)
+      barCircle("magnifyingglass", label: "搜索") { store.route = .search }
+      barCircle("gearshape.fill", label: "设置") { store.route = .settings }
+    }
+    .padding(.horizontal, 16)
+    .padding(.bottom, 8)
+  }
+
+  var glassCapsule: some View {
+    ZStack {
+      Capsule().fill(.ultraThinMaterial)
+      Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.7)
+    }
+    .shadow(color: .black.opacity(0.20), radius: 16, x: 0, y: 7)
+  }
+  var glassCircle: some View {
+    ZStack {
+      Circle().fill(.ultraThinMaterial)
+      Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.7)
+    }
+    .shadow(color: .black.opacity(0.20), radius: 16, x: 0, y: 7)
+  }
+
+  func barTab(_ t: Int, _ name: String, _ icon: String) -> some View {
+    let on = tab == t
+    return Button { go(t) } label: {
+      VStack(spacing: 2) {
+        Image(systemName: icon).font(.system(size: 19, weight: .semibold))
+        Text(name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
+      }
+      .foregroundStyle(on ? Color.primary : Color.secondary)
+      .frame(width: 64, height: 46)
+      .background {
+        if on {
+          Capsule().fill(Color.primary.opacity(0.10))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.6))
+            .matchedGeometryEffect(id: "barThumb", in: barNS)
+        }
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(PressStyle(scale: 0.94))
+  }
+
+  func barCircle(_ icon: String, label: String, _ fn: @escaping () -> Void) -> some View {
+    Button(action: fn) {
+      Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(.primary)
+        .frame(width: 52, height: 52)
+        .background { glassCircle }
+        .contentShape(Circle())
+    }
+    .buttonStyle(PressStyle(scale: 0.92))
+    .accessibilityLabel(label)
+  }
+}
+
+/// Global search (opened from the floating bar's search button): the same matching as
+/// 全部 App (name / domain / handle / notes / bound identity values), over every account.
+struct SearchView: View {
+  @Environment(Store.self) var store
+  @Environment(\.dismiss) var dismiss
+  @State private var query = ""
+
+  var results: [Account] {
+    let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+    guard !q.isEmpty else { return store.index.byName }
+    return store.index.byName.filter { matches($0, q) }
+  }
+  func matches(_ a: Account, _ q: String) -> Bool {
+    a.name.lowercased().contains(q) || a.domain.lowercased().contains(q) || (a.handle ?? "").lowercased().contains(q) || a.notes.lowercased().contains(q)
+      || a.identityIds.compactMap { store.identity($0) }.contains { $0.value.lowercased().contains(q) || $0.label.lowercased().contains(q) }
+  }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        if results.isEmpty {
+          Text("没有匹配的服务。").foregroundStyle(.secondary)
+        }
+        ForEach(results) { a in
+          Button { store.route = .account(a.id) } label: { ReelRow(account: a) }
+            .buttonStyle(PressStyle(scale: 0.98))
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+      .background(Glow().ignoresSafeArea())
+      .searchable(text: $query, prompt: "搜索名称、域名、账号名")
+      .navigationTitle("搜索").navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
+    }
+  }
 }
 
 struct SheetHost: View {
@@ -139,6 +271,7 @@ struct SheetHost: View {
     case .editAccount(let id): AccountFormHost(id: id)
     case .picker(let pre): PickerSheet(presetIdentity: pre)
     case .settings: SettingsSheet()
+    case .search: SearchView()
     }
   }
 }

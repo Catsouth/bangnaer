@@ -149,8 +149,17 @@ struct AccountDetail: View {
               tag(a.category)
               if !d.isEmpty { tag(d) }
             }.padding(.top, 10)
+            if a.bindMethodLabel != nil || a.bindStatusKey != "active" {
+              HStack(spacing: 6) {
+                if let m = a.bindMethodLabel { tag(m) }
+                if a.bindStatusKey != "active" { StatusBadge(status: a.bindStatusKey) }
+              }.padding(.top, 6)
+            }
             HStack(spacing: 10) {
-              act("打开网站", "safari", disabled: d.isEmpty) { if let u = URL(string: "https://" + d) { openURL(u) } }
+              act("前往登录", "safari", disabled: d.isEmpty) { if let u = URL(string: "https://" + d) { openURL(u) } }
+              act("复制账号", "doc.on.doc", disabled: (a.handle ?? "").isEmpty) {
+                if let h = a.handle { UIPasteboard.general.string = h; store.show("已复制账号") }
+              }
               act("编辑", "pencil") { store.route = .editAccount(a.id) }
               act("删除", "trash", destructive: true) { askDelete = true }
             }.padding(.horizontal, 20).padding(.top, 24)

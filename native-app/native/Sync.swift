@@ -127,6 +127,9 @@ final class Sync: ObservableObject {
     // aid, not part of the per-item merge; carrying it along keeps adopt() from wiping it.
     var seenTrash = Set<String>()
     out.trash = (a.trash + b.trash).filter { seenTrash.insert($0.id).inserted }
+    // 换绑清单 progress: union of "accountId|identityId" pairs (a set; a's order kept)
+    var seenRebind = Set<String>()
+    out.rebindDone = (a.rebindDone + b.rebindDone).filter { seenRebind.insert($0).inserted }
     for id in del.keys where out.identities.contains(where: { $0.id == id }) || out.accounts.contains(where: { $0.id == id }) { del[id] = nil }
     out.identities = out.identities.enumerated().sorted { ($0.element.order ?? 1e9, Double($0.offset)) < ($1.element.order ?? 1e9, Double($1.offset)) }.map(\.element)
     let ids = Set(out.identities.map(\.id))
@@ -139,7 +142,8 @@ final class Sync: ObservableObject {
   private static func sig(_ d: AtlasData) -> String {
     let e = JSONEncoder(); e.outputFormatting = .sortedKeys
     let a = (try? e.encode(d.identities)) ?? Data(), b = (try? e.encode(d.accounts)) ?? Data(), c = (try? e.encode(d.deleted)) ?? Data()
-    return String(decoding: a + b + c, as: UTF8.self)
+    let r = (try? e.encode(d.rebindDone.sorted())) ?? Data()
+    return String(decoding: a + b + c + r, as: UTF8.self)
   }
 
   // MARK: run

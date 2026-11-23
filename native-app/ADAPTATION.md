@@ -315,6 +315,15 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    - 数据衔接：转换器已写入的 3 张 provider="qq" 身份卡，本批后正确显示
      为 QQ 卡（蓝色、QQ 分组）；extra.bindType 未动。
 
+### 追加（第三批同期，2026-11-23）：「用绑哪儿打开」导入通道
+
+- Info.plist 声明 CFBundleDocumentTypes（public.json / public.data，Viewer +
+  Alternate，只读不抢默认应用）+ LSSupportsOpeningDocumentsInPlace=true；
+  AtlasApp 的 onOpenURL 接住从「文件」/分享进来的备份（security-scoped 读后走
+  Store.importBackup，成败都用现有 toast 口径）。起因：真机导入备份时系统文件
+  选择器对本地 json 反复点不动（已复现三次），绕开选择器；智能导入格式不在此
+  通道处理。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；
