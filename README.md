@@ -1,71 +1,42 @@
-# 绑哪儿 · 账号绑定记录
+# 绑哪儿 · BangNaEr
 
-记清每个邮箱、手机号、微信/QQ 号、Apple/Google 账户注册或绑定了哪些网站和 App。
-单文件网页版（PWA），数据只存在使用者自己的设备 + 自己填的 WebDAV 里，不经过任何第三方服务器，不存密码。
+**你的账号都绑在哪儿，一眼看清。**
 
-- 线上：https://bind.465871.xyz
-- 当前版本：见 `VERSION` 文件，历史见 `CHANGELOG.md`
+绑哪儿是一款 iOS 账号绑定记录应用：把邮箱、手机号、QQ、微信、Apple、Google 等「登录身份」，和它们各自绑定的网站 / App 记在一起。哪个服务绑的是哪个邮箱、哪个手机号，换绑、注销、体检时不用再靠记忆翻聊天记录。
 
-## 目录结构
+数据只存在你自己的设备上，可通过你自己的 WebDAV（如自建 OpenList）备份恢复，不经过任何第三方服务器。
 
-```
-.
-├── VERSION            # 当前版本号（构建时读它）
-├── CHANGELOG.md       # 版本史
-├── README.md
-├── build.sh           # 一键构建：校验 → 测试 → 组装 dist → 打包
-├── src/               # ★ 唯一源头，改东西只改这里
-│   ├── index.html         # 全部代码（HTML/CSS/JS 单文件；关于页版本号是 __VERSION__ 占位符）
-│   ├── manifest.webmanifest
-│   ├── icon.svg           # 图标矢量源
-│   ├── icon-192.png / icon-512.png / apple-touch-icon.png
-│   └── favicon.png / favicon.ico
-├── tests/             # DOM 桩回归测试（jsdom；test.js 全量、rapid.js 透镜连点）
-└── dist/              # 构建产物（不进 git）
-    ├── （组装好的 8 个静态文件，index.html 已替换真实版本号）
-    ├── atlas-web.zip          # 部署用固定名包
-    └── atlas-web-vX.Y.Z.zip   # 同内容的存档包
-```
+![关系球动画](docs/media/sphere-demo.gif)
 
-最终产物就是那 8 个静态文件，线上由 nginx 直接 serve，没有后端。
+## 截图
 
-## 怎么构建
+| 卡包 | 全部 App |
+| --- | --- |
+| ![卡包](docs/media/1-wallet.jpg) | ![全部 App](docs/media/3-sites.jpg) |
 
-```bash
-./build.sh
-```
+| 关系图 | 设置 |
+| --- | --- |
+| ![关系图](docs/media/4-map.jpg) | ![设置](docs/media/7-settings.jpg) |
 
-它会依次做：
+## 功能
 
-1. 读 `VERSION`，把 `src/index.html` 里的 `__VERSION__` 占位符替换成 `v<版本号>`（src 里永远只留占位符）；
-2. 抽出 `<script>` 做 `node --check`，不过就停；
-3. 跑 `tests/` 里的回归测试（需要 jsdom：`npm install jsdom`，或让 `NODE_PATH` 能找到 jsdom；缺 jsdom 时构建会报错停下，不会假装通过）；
-4. 把 8 个文件组装进 `dist/`；
-5. 打两个内容相同的包并打印各自 md5 和大小：`dist/atlas-web.zip`（部署用）、`dist/atlas-web-v<VERSION>.zip`（存档）。
+- **身份卡包**：邮箱 / 手机号 / QQ / 微信 / Apple / Google / 自定义登录卡，滑动翻卡，一张卡看清它绑定的全部服务
+- **三维关系球**：所有服务排成一颗球，拖动 360° 旋转、捏合缩放；长按顶部分组弹出该组身份列表，选中一个身份后球上只显示它绑定的服务，点空白恢复
+- **智能导入**：从密码管理器导出文件（Vaultwarden / Bitwarden）、浏览器 CSV、纯文本或剪贴板自动识别出邮箱 / 手机号与服务并预览去重——导入过程从不读取密码字段
+- **自动识别添加**：添加身份时自动给出剪贴板里的邮箱 / 手机号候选，点一下填入
+- **WebDAV 备份**：保存后自动备份到你自己的 WebDAV（带内容比对，不重复上传），换机一键恢复；也支持 Gist 同步与 JSON 导入导出
+- **回收站**：删错不慌，删除先进回收站，可恢复
+- **PIN 锁**：4–6 位 PIN（可选 Face ID），冷启动与后台超时自动上锁
+- **换绑清单与账号体检**：换手机号 / 邮箱时生成逐项打勾的换绑清单；体检找出未绑任何身份的服务、重复绑定等问题
+- **登录方式与状态标记**：每个服务可标登录方式（密码 / 短信 / 第三方登录等）与状态，详情页可前往登录或复制账号
+- **服务图标**：优先取自 [离歌图标包](https://github.com/Catsouth/lige_icon)（1,000+ 国内服务图标），缺失时自动补抓官方图标
 
-## 怎么部署
+## 构建
 
-线上形态（不要动）：ARM 服务器 `~/bind-atlas/`，nginx:alpine 容器 `bind-atlas` 只绑 `127.0.0.1:5235` serve `site/` 目录，Cloudflare 隧道 arm-sd1 的 `bind.465871.xyz` 指过来，不套 Access。隧道和容器都不用动，更新只是换 `site/` 里的文件。
+本仓库不含 Xcode 工程：GitHub Actions 在 macOS 上用 `swiftc` 直接编译 `native-app/native/*.swift` 并打包未签名 IPA（构建号 = 提交数 + 1000），用你自己的证书签名后安装。模拟器截图由同一工作流的 preview 任务产出。
 
-在 ARM 上（ubuntu 无 docker 组权限，全程不用 docker 命令）：
+网页版（v1.10.2）已冻结，仍可访问：<https://bind.465871.xyz>
 
-```bash
-# 1) 下载新包（地址是构建后给的 Muse 存储直链，有效期有限）
-curl -L -o ~/bind-atlas/atlas-web.zip "下载直链"
-# 2) 校验 md5，必须和构建输出的一致
-md5sum ~/bind-atlas/atlas-web.zip
-# 3) 解压覆盖 site/
-cd ~/bind-atlas && python3 -m zipfile -e atlas-web.zip site/
-# 4) 本机先验新版字样（按版本换关键词，如关系图/版本号）
-curl -s http://127.0.0.1:5235/ | grep -o '换绑清单' | head -1
-```
+## 开源与致谢
 
-然后从外网打开 https://bind.465871.xyz 验证（状态 200 + 新版字样在）。nginx 直接读 `site/` 文件，不用重启容器。手机端若看到旧版，把页面彻底关掉重开清缓存。
-
-## 怎么发新版
-
-1. 改 `src/` 里的文件（只改 src，dist 是产物不要手改）；
-2. 改 `VERSION`（递增版本号），在 `CHANGELOG.md` 顶部补一节新版说明；
-3. `./build.sh`，全绿才算数；
-4. 把 `dist/atlas-web.zip` 传一份到 Muse 存储拿直链，按上面的部署流程替换，md5 对上才解压；
-5. `git add -A && git commit` 记下这次发版（dist 和 zip 不进 git，靠构建再生）。
+本项目基于 [Ckxkx/account-atlas](https://github.com/Ckxkx/account-atlas) v2.2 的原生 SwiftUI 源码改造，整体以 **GPL-3.0** 开源（见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)）。原项目的品牌资产（Logo、图标）不在 GPL 授权范围内，本项目未使用，App 图标为自制。
