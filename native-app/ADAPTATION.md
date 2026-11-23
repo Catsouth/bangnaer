@@ -604,6 +604,57 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    离屏缓存。本地无 Xcode 未编译验证，待 CI 一轮确认（改动自包含
    于 SphereMap.swift，无跨文件引用）。
 
+### 第七轮细化（2026-11-23，构建号 1031 真机验收反馈，本地提交未推送）
+
+用户原话：「停下来，出名字的时候会卡顿下，能名字一直显示，不要
+出现网址吗」。两条（SphereMap.swift）：
+
+1. **名称常显，撤销第六轮的运动降载跳名**：第六轮「运动中跳过名称
+   绘制、停下才画」在真机上适得其反——停下那一刻全部名称齐刷刷
+   出现，反而卡一下。本轮删除 canvas 的 `moving` 入参及两处调用点
+   的传参，名称恢复为通过门槛（沿用旧口径 r>=16 且 z>0.1）即任何
+   时候都画。防停下卡顿改走「不许显隐切换」的路子：① 名称字符串
+   在规格缓存阶段（computeBubbles）预计算为 `SphereBubble.displayLabel`，
+   逐帧绘制零字符串处理；② 每帧名称绘制设上限——ps 已按 z 升序
+   （背面在前），从最前（z 最大）往后数，通过门槛者最多画 48 个
+   （labelIndices 集合，绘制循环按下标查）；③ 核实 commitSpin 只把
+   spin 姿态折回 q、置空 spin，从不碰 cachedBubbles，规格刷新只挂
+   onAppear 与 accounts/identities 的 onChange，spin 结束不触发
+   规格重算（无改动，仅确认）。
+
+2. **标签只出名字、不出网址（SphereLabel）**：这批服务入库时 name
+   字段就是原始域名（binance.com、zhj.sccchina.net、xn--…），球面
+   原样画出来像网址。displayLabel 在规格计算阶段生成，规则：
+   - name 是正常名称（含空格、或含非 ASCII 字符、或非域名形态）
+     → 直接用 name；
+   - name 是域名形态（等于 domain、以 `.`+domain 结尾、或纯 ASCII
+     点分主机串且末段为 ≥2 位字母）→ 从 domain（domain 为空时用
+     name 本身）派生友好名：按双段后缀表（co.cn/com.cn/gov.cn/
+     org.cn/net.cn/edu.cn/ac.cn、com.au/gov.au 等 au/uk/hk/tw/sg/
+     jp/kr 系列，共 39 条）定位注册域主标签——普通后缀取倒数第二
+     段、双段后缀取倒数第三段，前面的子域天然被忽略
+     （binance.com→binance、zhj.sccchina.net→sccchina、
+     online.immi.gov.au→immi）；主标签以 xn-- 开头时用内置 RFC 3492
+     punycode 解码（`Punycode.decode`，含溢出与非法码点防护，自检
+     向量 fiqs8s→中国、bcher-kva→bücher、fiq228c→中文，注释在
+     代码里）；其余首字母大写（Binance、Sccchina）；
+   - 派生不出（主机为空、主标签纯数字、punycode 解码失败）→ 回退
+     name 原样截断至 16 字。
+   无图标时的字母块首字母同步改读 displayLabel（域名名的气泡显示
+   友好名首字母/解码汉字，不再露原始主机首字母）。**只改球面显示，
+   不动数据**：全部 App 列表等其他页面照旧用 account.name。
+
+3. **保持不变**：四元数 trackball 转动与惯性、身份/组聚焦行为、
+   深度 alpha 曲线、图标绘制与 min(1, zoom) 尺寸上限、点按命中
+   测试等其余全部。
+
+4. **残余风险**：本地无 Xcode 未编译验证，待 CI 一轮确认（改动自
+   包含于 SphereMap.swift；SphereBubble 新增字段仅 computeBubbles
+   一处构造）。常显后每帧最多 48 个 Text 绘制是新增的恒定成本，
+   若真机拖动帧率仍不理想，下一步才考虑名称预渲染为图片。友好名
+   派生是启发式：双段后缀表未覆盖的小众后缀（如 .com.br）会取错
+   一段，属可接受偏差，后续按真机样本补表。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

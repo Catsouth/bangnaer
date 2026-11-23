@@ -102,6 +102,159 @@ struct SphereBubble {
   let dir: Vec3
   let baseR: CGFloat
   let group: SphereGroup
+  /// What the under-bubble label draws （第七轮）: precomputed once in
+  /// computeBubbles so the per-frame canvas does zero string work, and
+  /// never a raw URL — domain-shaped names are replaced by a friendly
+  /// name derived from the registrable domain (see SphereLabel). Display
+  /// only: the account data itself is never touched.
+  let displayLabel: String
+}
+
+/// Friendly sphere labels （第七轮）: a chunk of the library was imported
+/// with the raw domain sitting in the name field (binance.com,
+/// zhj.sccchina.net, xn--…), and the sphere used to draw that verbatim
+/// under the bubble. The label now derives a name instead: a real name
+/// passes through untouched; a domain-shaped name is replaced by the
+/// registrable domain's main label, capitalised (binance.com → Binance,
+/// zhj.sccchina.net → Sccchina), with xn-- labels punycode-decoded back
+/// to Chinese. Only the sphere reads this — every other page keeps
+/// showing account.name as stored.
+enum SphereLabel {
+  /// Two-part public suffixes: the registrable name sits one level
+  /// higher than usual (example.com.cn → "example", not "com";
+  /// online.immi.gov.au → "immi", not "gov").
+  static let twoPartSuffixes: Set<String> = [
+    "co.cn", "com.cn", "gov.cn", "org.cn", "net.cn", "edu.cn", "ac.cn",
+    "com.au", "gov.au", "org.au", "net.au", "edu.au",
+    "co.uk", "org.uk", "gov.uk", "ac.uk",
+    "com.hk", "gov.hk", "org.hk", "net.hk", "edu.hk",
+    "com.tw", "gov.tw", "org.tw", "net.tw", "edu.tw",
+    "com.sg", "gov.sg", "org.sg", "net.sg",
+    "co.jp", "or.jp", "go.jp", "ne.jp", "ac.jp",
+    "co.kr", "or.kr", "go.kr", "ne.kr",
+  ]
+
+  static func make(name rawName: String, domain rawDomain: String) -> String {
+    let name = rawName.trimmingCharacters(in: .whitespaces)
+    let domain = rawDomain.trimmingCharacters(in: .whitespaces).lowercased()
+    guard isDomainLike(name, domain: domain) else { return name }
+    if let friendly = friendlyName(fromHost: domain.isEmpty ? name.lowercased() : domain) {
+      return friendly
+    }
+    // derivation gave up (empty host, numeric IP label, undecodable
+    // punycode): fall back to the stored name, truncated
+    return String(name.prefix(16))
+  }
+
+  /// A name counts as domain-shaped when it equals / ends with the
+  /// account's domain, or is a pure-ASCII dotted host string. Real names
+  /// — anything with a space or a non-ASCII character — never qualify.
+  static func isDomainLike(_ name: String, domain: String) -> Bool {
+    if name.isEmpty { return !domain.isEmpty }
+    if name.contains(" ") { return false }
+    if name.unicodeScalars.contains(where: { $0.value > 127 }) { return false }
+    let lower = name.lowercased()
+    if !domain.isEmpty && (lower == domain || lower.hasSuffix("." + domain)) { return true }
+    let labels = lower.split(separator: ".", omittingEmptySubsequences: false)
+    guard labels.count >= 2,
+          labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) })
+    else { return false }
+    let tld = labels.last!
+    return tld.count >= 2 && tld.allSatisfy({ $0.isLetter })
+  }
+
+  /// The registrable label of a host, capitalised: walk past the public
+  /// suffix (two-part suffixes consume one extra label), take the label
+  /// just above it — subdomains in front of it are ignored by
+  /// construction (zhj.sccchina.net → sccchina). An xn-- label is
+  /// punycode-decoded instead of capitalised. Nil when there is no
+  /// usable label (too few labels, or a purely numeric one).
+  static func friendlyName(fromHost host: String) -> String? {
+    let labels = host.split(separator: ".", omittingEmptySubsequences: true).map(String.init)
+    guard labels.count >= 2 else { return nil }
+    let lastTwo = labels.suffix(2).joined(separator: ".")
+    let mainIdx = twoPartSuffixes.contains(lastTwo) ? labels.count - 3 : labels.count - 2
+    guard mainIdx >= 0 else { return nil }
+    let main = labels[mainIdx]
+    if main.hasPrefix("xn--") {
+      guard let decoded = Punycode.decode(String(main.dropFirst(4))), !decoded.isEmpty else { return nil }
+      return decoded
+    }
+    guard !main.isEmpty, !main.allSatisfy({ $0.isNumber }) else { return nil }
+    return String(main.prefix(1)).uppercased() + String(main.dropFirst())
+  }
+}
+
+/// Minimal RFC 3492 punycode decoder for one "xn--" label payload (the
+/// part after the prefix); nil on malformed input. Self-check vectors
+/// (verified against the reference codec):
+///   decode("fiqs8s")    == "中国"    (xn--fiqs8s)
+///   decode("bcher-kva") == "bücher"  (xn--bcher-kva)
+///   decode("fiq228c")   == "中文"    (xn--fiq228c)
+enum Punycode {
+  static func decode(_ payload: String) -> String? {
+    let base = 36, tmin = 1, tmax = 26, skew = 38, damp = 700
+    let initialBias = 72, initialN = 128
+    func digit(_ ch: Character) -> Int? {
+      guard let v = ch.asciiValue else { return nil }
+      switch v {
+      case 97...122: return Int(v - 97)      // a-z → 0-25
+      case 65...90: return Int(v - 65)       // A-Z → 0-25
+      case 48...57: return Int(v - 48) + 26  // 0-9 → 26-35
+      default: return nil
+      }
+    }
+    func adapt(_ delta0: Int, _ numPoints: Int, _ firstTime: Bool) -> Int {
+      var delta = firstTime ? delta0 / damp : delta0 / 2
+      delta += delta / numPoints
+      var k = 0
+      while delta > (base - tmin) * tmax / 2 {
+        delta /= base - tmin
+        k += base
+      }
+      return k + (base - tmin + 1) * delta / (delta + skew)
+    }
+    let chars = Array(payload)
+    var output: [UInt32] = []
+    var read = 0
+    // basic code points ahead of the last delimiter are copied verbatim
+    if let lastDash = chars.lastIndex(of: "-") {
+      for ch in chars[..<lastDash] {
+        guard let v = ch.asciiValue, v < 128 else { return nil }
+        output.append(UInt32(v))
+      }
+      read = lastDash + 1
+    }
+    var n = initialN, i = 0, bias = initialBias
+    while read < chars.count {
+      let oldi = i
+      var w = 1, k = base
+      while true {
+        guard read < chars.count, let d = digit(chars[read]) else { return nil }
+        read += 1
+        i += d * w
+        guard i < (1 << 30) else { return nil }   // overflow guard
+        let t = k <= bias ? tmin : (k >= bias + tmax ? tmax : k - bias)
+        if d < t { break }
+        guard w <= (1 << 30) / (base - t) else { return nil }
+        w *= base - t
+        k += base
+      }
+      let outLen = output.count + 1
+      bias = adapt(i - oldi, outLen, oldi == 0)
+      n += i / outLen
+      i %= outLen
+      guard n >= 0, n <= 0x10FFFF, !(0xD800...0xDFFF).contains(n) else { return nil }
+      output.insert(UInt32(n), at: i)
+      i += 1
+    }
+    var result = ""
+    for cp in output {
+      guard let s = Unicode.Scalar(cp) else { return nil }
+      result.unicodeScalars.append(s)
+    }
+    return result
+  }
 }
 
 enum SphereMath {
@@ -185,7 +338,8 @@ struct MapView: View {
     return accs.enumerated().map { k, a in
       let first = a.identityIds.lazy.compactMap { index.identityByID[$0] }.first
       let r = min(24, 13 + 4.5 * sqrt(Double(a.identityIds.count)))
-      return SphereBubble(account: a, dir: dirs[k], baseR: r, group: SphereGroup.of(first))
+      return SphereBubble(account: a, dir: dirs[k], baseR: r, group: SphereGroup.of(first),
+                          displayLabel: SphereLabel.make(name: a.name, domain: a.domain))
     }
   }
   func refreshBubbles() { cachedBubbles = Self.computeBubbles(store.index) }
@@ -267,7 +421,7 @@ struct MapView: View {
     let specs = bubbles
     if let spin {
       TimelineView(.animation) { ctx in
-        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date), moving: true)
+        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date))
       }
       .task(id: spin.start) {
         // the ViewBuilder above can't run side effects, so spin-end detection
@@ -282,14 +436,16 @@ struct MapView: View {
         }
       }
     } else {
-      // moving （第六轮）: while a drag / pinch / spin is live the canvas
-      // skips the per-bubble name labels — resolved Text drawing is one of
-      // the big per-frame costs at 150+ bubbles; labels return at rest.
-      canvas(specs: specs, size: size, q: q, moving: dragActive || pinchBase != nil)
+      // Labels are always drawn （第七轮）: 第六轮's motion load-shed
+      // (names appear only at rest) made the whole set pop in the moment
+      // the ball stopped — one visible hitch. Labels now stay on, and
+      // the stop-frame cost is bounded inside the canvas instead
+      // (precomputed label strings + a per-frame cap).
+      canvas(specs: specs, size: size, q: q)
     }
   }
 
-  func canvas(specs: [SphereBubble], size: CGSize, q: Quat, moving: Bool) -> some View {
+  func canvas(specs: [SphereBubble], size: CGSize, q: Quat) -> some View {
     let _ = iconTick
     return Canvas { ctx, _ in
       let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
@@ -318,6 +474,18 @@ struct MapView: View {
       if let f = focus, case .identity(let fid) = f {
         ps = ps.filter { $0.b.account.identityIds.contains(fid) }
       }
+      // Label budget （第七轮）: labels are always on now, so the frame
+      // cost is capped instead — past the usual gate (r >= 16, front
+      // hemisphere), only the front-most 48 bubbles get a label. ps is
+      // sorted back-to-front, so the budget is spent scanning from the
+      // front (the end of the array) backwards.
+      var labelIndices = Set<Int>()
+      var labelBudget = 48
+      for idx in ps.indices.reversed() where ps[idx].r >= 16 && ps[idx].z > 0.1 {
+        if labelBudget == 0 { break }
+        labelIndices.insert(idx)
+        labelBudget -= 1
+      }
       // Focus threads （第三轮细化）: an identity focus connects the centre to
       // every bubble bound to that identity, in the identity's own colour,
       // under the bubbles (drawn first, and the canvas never hit-tests anyway).
@@ -335,7 +503,7 @@ struct MapView: View {
           ctx.stroke(path, with: .color(thread.opacity(a)), lineWidth: 1)
         }
       }
-      for item in ps {
+      for (idx, item) in ps.enumerated() {
         let t = (item.z + 1) / 2
         var alpha = 0.10 + 0.90 * pow(t, 1.4)
         let dimmed: Bool = switch focus {
@@ -356,16 +524,19 @@ struct MapView: View {
         } else {
           let brand = brandColor(name: item.b.account.name, domain: item.b.account.domain)
           ctx.fill(Path(ellipseIn: rect), with: .color(brand.opacity((0.30 + 0.70 * t) * alpha)))
-          let letter = String(item.b.account.name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+          // the tile letter follows the label （第七轮）: a domain-named
+          // account shows its friendly initial (or decoded Chinese),
+          // never the raw host's first letter
+          let letter = String(item.b.displayLabel.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
           ctx.draw(Text(letter).font(.system(size: item.r * 0.92, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(alpha)),
                    at: item.c, anchor: .center)
         }
         ctx.stroke(Path(ellipseIn: rect), with: .color(item.b.group.color.opacity(alpha)), lineWidth: 1.5)
-        // name under the bigger front bubbles — skipped while the ball is
-        // moving （第六轮）: per-frame Text resolution is a major cost at
-        // this bubble count, and nobody reads labels mid-fling anyway
-        if !moving && item.r >= 16 && item.z > 0.1 {
-          ctx.draw(Text(item.b.account.name).font(.system(size: 9, weight: .medium)).foregroundStyle(.primary.opacity(alpha)),
+        // name under the bigger front bubbles — always drawn （第七轮）,
+        // within the frame's label budget; the string is the spec's
+        // precomputed displayLabel, so this is a draw, not a computation
+        if labelIndices.contains(idx) {
+          ctx.draw(Text(item.b.displayLabel).font(.system(size: 9, weight: .medium)).foregroundStyle(.primary.opacity(alpha)),
                    at: CGPoint(x: item.c.x, y: item.c.y + item.r + 8), anchor: .center)
         }
       }
