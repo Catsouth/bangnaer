@@ -181,10 +181,19 @@ struct MapView: View {
     if let spin {
       TimelineView(.animation) { ctx in
         let ang = spin.rotation(at: ctx.date)
-        if spin.speed(at: ctx.date) < 0.06 {
-          DispatchQueue.main.async { commitSpin() }
-        }
         canvas(specs: specs, size: size, yaw: ang.yaw, pitch: clampPitch(ang.pitch))
+      }
+      .task(id: spin.start) {
+        // the ViewBuilder above can't run side effects, so spin-end detection
+        // lives here: poll the captured spin's decay, then fold it into yaw/pitch
+        let mine = spin
+        while !Task.isCancelled {
+          if mine.speed(at: Date()) < 0.06 {
+            if self.spin?.start == mine.start { commitSpin() }
+            return
+          }
+          try? await Task.sleep(for: .milliseconds(60))
+        }
       }
     } else {
       canvas(specs: specs, size: size, yaw: yaw, pitch: pitch)
