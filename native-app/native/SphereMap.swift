@@ -4,7 +4,10 @@ import UIKit
 // MARK: - sphere galaxy （绑哪儿第三批：关系图整页三维球形星系，替换上游双列连线图）
 //
 // The whole tab is one sphere: every account is a bubble on a Fibonacci sphere, drawn with a
-// single Canvas (150+ bubbles never become views). Drag rotates (quaternion trackball
+// single Canvas (150+ bubbles never become views). Since 第八轮 every bubble face and
+// label is a bitmap pre-rendered at spec time (SphereBaker), so a frame is just one
+// drawImage per bubble — the old per-frame clip + big-icon scale + Text layout was the
+// diagnosed drag hitch. Drag rotates (quaternion trackball
 // since 第六轮： no Euler angles, no pitch clamp, so the ball rolls 360° in every
 // direction), pinch zooms, back-side bubbles fade/shrink and can't
 // be tapped; a front bubble tap opens the account. Bubble rims are coloured by the group of
@@ -108,6 +111,20 @@ struct SphereBubble {
   /// name derived from the registrable domain (see SphereLabel). Display
   /// only: the account data itself is never touched.
   let displayLabel: String
+  /// Pre-rendered bubble face （第八轮）: the circular-clipped icon (or
+  /// brand letter tile), favicon backing and group rim, baked offscreen
+  /// once by SphereBaker at the largest size a bubble can reach. The
+  /// per-frame canvas only drawImages this bitmap (GPU scales it) with
+  /// the frame's opacity — no per-frame clip / stroke / decode of the
+  /// up-to-288px source icon, which was the diagnosed hitch: ~150
+  /// bubbles × clip+scale+stroke+Text at 120 Hz blew the frame budget
+  /// and the drag stuttered periodically.
+  let baked: UIImage
+  /// Pre-rendered label bitmaps （第八轮）, one per colour scheme (the
+  /// canvas picks at draw time): displayLabel typeset once at spec
+  /// time, drawn per frame as an image instead of a Text layout.
+  let labelLight: UIImage?
+  let labelDark: UIImage?
 }
 
 /// Friendly sphere labels （第七轮）: a chunk of the library was imported
@@ -167,21 +184,34 @@ enum SphereLabel {
   /// suffix (two-part suffixes consume one extra label), take the label
   /// just above it — subdomains in front of it are ignored by
   /// construction (zhj.sccchina.net → sccchina). An xn-- label is
-  /// punycode-decoded instead of capitalised. Nil when there is no
-  /// usable label (too few labels, or a purely numeric one).
+  /// punycode-decoded instead of capitalised. A purely numeric main
+  /// label (yun.139.com → "139") falls back to the leftmost label
+  /// instead of giving up （第八轮）: yun.139.com → Yun. Nil when there
+  /// is no usable label at all (too few labels, numeric everywhere).
   static func friendlyName(fromHost host: String) -> String? {
     let labels = host.split(separator: ".", omittingEmptySubsequences: true).map(String.init)
     guard labels.count >= 2 else { return nil }
     let lastTwo = labels.suffix(2).joined(separator: ".")
     let mainIdx = twoPartSuffixes.contains(lastTwo) ? labels.count - 3 : labels.count - 2
     guard mainIdx >= 0 else { return nil }
-    let main = labels[mainIdx]
-    if main.hasPrefix("xn--") {
-      guard let decoded = Punycode.decode(String(main.dropFirst(4))), !decoded.isEmpty else { return nil }
+    if let s = friendlyLabel(labels[mainIdx]) { return s }
+    // numeric main label: derive from the leftmost label instead of
+    // falling back to the raw domain string
+    guard mainIdx > 0 else { return nil }
+    let left = labels[0]
+    guard left != "www" else { return nil }
+    return friendlyLabel(left)
+  }
+
+  /// One host label as a display name: xn-- punycode-decoded, anything
+  /// else capitalised; nil for an empty or purely numeric label.
+  static func friendlyLabel(_ label: String) -> String? {
+    if label.hasPrefix("xn--") {
+      guard let decoded = Punycode.decode(String(label.dropFirst(4))), !decoded.isEmpty else { return nil }
       return decoded
     }
-    guard !main.isEmpty, !main.allSatisfy({ $0.isNumber }) else { return nil }
-    return String(main.prefix(1)).uppercased() + String(main.dropFirst())
+    guard !label.isEmpty, !label.allSatisfy({ $0.isNumber }) else { return nil }
+    return String(label.prefix(1)).uppercased() + String(label.dropFirst())
   }
 }
 
@@ -300,8 +330,135 @@ struct SphereSpin {
   }
 }
 
+/// The sphere's face at bake size, rendered offscreen once per bubble
+/// by SphereBaker （第八轮）. Mirrors what the canvas used to draw every
+/// frame: favicon bubbles sit on a white disc with the icon inset,
+/// bundled/custom icons fill the circle, icon-less accounts get the
+/// brand-colour letter tile, and the group rim is baked in (inside the
+/// bounds via strokeBorder). Everything is baked at full opacity; the
+/// per-frame depth / focus alpha is applied by the canvas through
+/// GraphicsContext.opacity, so one bake serves every frame.
+struct BubbleFace: View {
+  let entry: IconEntry?
+  let brand: Color
+  let letter: String
+  let rim: Color
+  /// Bake diameter in points: the largest a bubble can be drawn is
+  /// 2 × baseR(≤24) × projection scale(≤ focal/(focal−1) ≈ 1.45) ≈ 70pt,
+  /// so 80pt at scale 2 (160px) covers it — the GPU upscales the last
+  /// few percent on @3x screens, far cheaper than re-clipping the
+  /// up-to-288px source every frame.
+  static let diameter: CGFloat = 80
+  var body: some View {
+    ZStack {
+      if let entry {
+        if entry.favicon {
+          Circle().fill(.white)
+          Image(uiImage: entry.image).resizable()
+            .padding(Self.diameter * 0.14)   // = the old r × 0.28 inset, as a fraction of the diameter
+        } else {
+          Image(uiImage: entry.image).resizable()
+        }
+      } else {
+        Circle().fill(brand)
+        Text(letter).font(.system(size: Self.diameter / 2 * 0.92, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white)
+      }
+    }
+    .frame(width: Self.diameter, height: Self.diameter)
+    .clipShape(Circle())
+    .overlay { Circle().strokeBorder(rim, lineWidth: 2.5) }
+  }
+}
+
+/// Offscreen pre-rendering for the sphere （第八轮）. Bakes bubble faces
+/// and label bitmaps at spec time (computeBubbles) and caches them, so
+/// the per-frame canvas is reduced to one drawImage per bubble plus
+/// one per label. Icons that are still in flight when specs are
+/// computed are baked as letter tiles first; computeBubbles registers
+/// the IconStore load through ensureLoad, and when the icon lands the
+/// baker coalesces the burst into one revision bump, which the view
+/// turns into a spec refresh that re-bakes just the new faces (the
+/// caches make every already-baked face a dictionary hit).
+@MainActor final class SphereBaker: ObservableObject {
+  static let shared = SphereBaker()
+  @Published private(set) var revision = 0
+  private var bubbleCache: [String: UIImage] = [:]
+  private var labelCache: [String: UIImage] = [:]
+  private var loadRegistered = Set<String>()
+  private var bumpScheduled = false
+
+  /// The baked face for one bubble spec. The cache key carries every
+  /// input the bake reads (account, icon key + presence, name/domain
+  /// for the brand colour, group for the rim), so an edit that changes
+  /// any of them bakes fresh instead of serving the stale face. The
+  /// cache is never evicted: one small bitmap per account state, and
+  /// account edits are rare.
+  func bubbleImage(account: Account, iconKey: String, entry: IconEntry?,
+                   brand: Color, letter: String, group: SphereGroup) -> UIImage {
+    let ck = [account.id, iconKey, entry != nil ? "i" : "t", account.name, account.domain,
+              String(group.rawValue), letter].joined(separator: "|")
+    if let img = bubbleCache[ck] { return img }
+    let renderer = ImageRenderer(content: BubbleFace(entry: entry, brand: brand, letter: letter, rim: group.color))
+    renderer.scale = 2
+    let img = renderer.uiImage ?? UIImage()
+    bubbleCache[ck] = img
+    return img
+  }
+
+  /// displayLabel typeset once, as a transparent bitmap (black text for
+  /// light mode, white for dark — the canvas's .primary at 9pt). Nil
+  /// for an empty label or a failed render; the canvas then draws
+  /// nothing, as it effectively did for an empty Text.
+  func labelImage(_ text: String, scheme: ColorScheme) -> UIImage? {
+    guard !text.isEmpty else { return nil }
+    let ck = (scheme == .dark ? "d|" : "l|") + text
+    if let img = labelCache[ck] { return img }
+    let renderer = ImageRenderer(content:
+      Text(text).font(.system(size: 9, weight: .medium))
+        .foregroundStyle(scheme == .dark ? Color.white : Color.black))
+    renderer.scale = 3
+    let img = renderer.uiImage
+    if let img { labelCache[ck] = img }
+    return img
+  }
+
+  /// Register an IconStore load for a key whose icon was missing at
+  /// spec time (once per key — IconStore itself coalesces waiters, this
+  /// set keeps spec refreshes from stacking duplicate callbacks). When
+  /// the load finishes, one coalesced revision bump asks the view to
+  /// refresh specs so the bubble re-bakes with its real icon.
+  func ensureLoad(key: String) {
+    guard !key.isEmpty, loadRegistered.insert(key).inserted else { return }
+    IconStore.shared.load(key) { _ in
+      Task { @MainActor in SphereBaker.shared.loadFinished(key) }
+    }
+  }
+
+  private func loadFinished(_ key: String) {
+    loadRegistered.remove(key)
+    noteIconReady()
+  }
+
+  private func noteIconReady() {
+    guard !bumpScheduled else { return }
+    bumpScheduled = true
+    Task { @MainActor in
+      // icons land in bursts (prefetch); one refresh per burst is enough
+      try? await Task.sleep(for: .milliseconds(150))
+      self.bumpScheduled = false
+      self.revision &+= 1
+    }
+  }
+}
+
 struct MapView: View {
   @Environment(Store.self) var store
+  @Environment(\.colorScheme) private var colorScheme
+  // Pre-rendering （第八轮）: when icons that were missing at spec time
+  // land, the baker bumps its revision and the specs refresh (below),
+  // re-baking those bubbles with their real icons.
+  @ObservedObject private var baker = SphereBaker.shared
   // committed orientation / zoom （第六轮）: one unit quaternion instead of
   // yaw/pitch — the initial value reproduces the old yaw 0.6 then pitch -0.3
   // tilt (Rx(-0.3) ∘ Ry(0.6)) so the ball opens at the same angle as before.
@@ -338,8 +495,30 @@ struct MapView: View {
     return accs.enumerated().map { k, a in
       let first = a.identityIds.lazy.compactMap { index.identityByID[$0] }.first
       let r = min(24, 13 + 4.5 * sqrt(Double(a.identityIds.count)))
-      return SphereBubble(account: a, dir: dirs[k], baseR: r, group: SphereGroup.of(first),
-                          displayLabel: SphereLabel.make(name: a.name, domain: a.domain))
+      let group = SphereGroup.of(first)
+      let label = SphereLabel.make(name: a.name, domain: a.domain)
+      // Pre-rendering （第八轮）: everything the frame used to recompute
+      // or re-draw per bubble is resolved here, once — the icon key,
+      // the decoded entry, the baked face and the label bitmaps. An
+      // icon still in flight bakes as a letter tile for now; the load
+      // registered with the baker re-bakes it when it lands (revision
+      // bump → spec refresh), riding IconStore's existing pipeline.
+      let key = IconStore.shared.key(name: a.name, domain: a.domain, icon: a.icon)
+      let entry = key.isEmpty ? nil : IconStore.shared.cached(key)
+      if entry == nil && !key.isEmpty && !IconStore.shared.hasFailed(key) {
+        SphereBaker.shared.ensureLoad(key: key)
+      }
+      // the tile letter follows the label （第七轮）: a domain-named
+      // account shows its friendly initial (or decoded Chinese),
+      // never the raw host's first letter
+      let letter = String(label.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+      let baked = SphereBaker.shared.bubbleImage(account: a, iconKey: key, entry: entry,
+                                                 brand: brandColor(name: a.name, domain: a.domain),
+                                                 letter: letter, group: group)
+      return SphereBubble(account: a, dir: dirs[k], baseR: r, group: group,
+                          displayLabel: label, baked: baked,
+                          labelLight: SphereBaker.shared.labelImage(label, scheme: .light),
+                          labelDark: SphereBaker.shared.labelImage(label, scheme: .dark))
     }
   }
   func refreshBubbles() { cachedBubbles = Self.computeBubbles(store.index) }
@@ -399,6 +578,10 @@ struct MapView: View {
     // cache once extra — a rare spare rebuild, never a stale ball.
     .onChange(of: store.data.accounts) { _, _ in refreshBubbles() }
     .onChange(of: store.data.identities) { _, _ in refreshBubbles() }
+    // Icons landing after spec time （第八轮）: the baker's coalesced
+    // revision bump refreshes the specs so those bubbles re-bake with
+    // their real icons (faces already baked stay cache hits).
+    .onChange(of: baker.revision) { _, _ in refreshBubbles() }
     .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
       GroupIdentitiesSheet(group: g,
                            onPick: { i in
@@ -420,8 +603,11 @@ struct MapView: View {
   @ViewBuilder func sphere(in size: CGSize) -> some View {
     let specs = bubbles
     if let spin {
-      TimelineView(.animation) { ctx in
-        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date))
+      // Frame-rate cap （第八轮）: 60 fps halves the per-second redraw
+      // count on 120 Hz screens and doubles the frame budget; drag and
+      // inertia are gesture/event driven, so their feel is unchanged.
+      TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
+        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date), scheme: colorScheme)
       }
       .task(id: spin.start) {
         // the ViewBuilder above can't run side effects, so spin-end detection
@@ -441,11 +627,11 @@ struct MapView: View {
       // the ball stopped — one visible hitch. Labels now stay on, and
       // the stop-frame cost is bounded inside the canvas instead
       // (precomputed label strings + a per-frame cap).
-      canvas(specs: specs, size: size, q: q)
+      canvas(specs: specs, size: size, q: q, scheme: colorScheme)
     }
   }
 
-  func canvas(specs: [SphereBubble], size: CGSize, q: Quat) -> some View {
+  func canvas(specs: [SphereBubble], size: CGSize, q: Quat, scheme: ColorScheme) -> some View {
     let _ = iconTick
     return Canvas { ctx, _ in
       let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
@@ -513,31 +699,31 @@ struct MapView: View {
         }
         if dimmed { alpha *= 0.22 }
         let rect = CGRect(x: item.c.x - item.r, y: item.c.y - item.r, width: item.r * 2, height: item.r * 2)
-        // body: the service icon when decoded, else a brand-colour letter tile
-        let key = IconStore.shared.key(name: item.b.account.name, domain: item.b.account.domain, icon: item.b.account.icon)
-        if let entry = IconStore.shared.cached(key) {
-          if entry.favicon { ctx.fill(Path(ellipseIn: rect), with: .color(.white.opacity(alpha))) }
-          var c = ctx
-          c.clip(to: Path(ellipseIn: rect))
-          let inset = entry.favicon ? item.r * 0.28 : 0
-          c.draw(Image(uiImage: entry.image), in: rect.insetBy(dx: inset, dy: inset))
-        } else {
-          let brand = brandColor(name: item.b.account.name, domain: item.b.account.domain)
-          ctx.fill(Path(ellipseIn: rect), with: .color(brand.opacity((0.30 + 0.70 * t) * alpha)))
-          // the tile letter follows the label （第七轮）: a domain-named
-          // account shows its friendly initial (or decoded Chinese),
-          // never the raw host's first letter
-          let letter = String(item.b.displayLabel.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
-          ctx.draw(Text(letter).font(.system(size: item.r * 0.92, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(alpha)),
-                   at: item.c, anchor: .center)
+        // Back-face culling （第八轮）: a bubble projecting under 4pt is
+        // a speck — draw it as a plain group-colour dot, no bitmap, no
+        // label. Hit-testing is unaffected: tap() projects from the
+        // specs, never from what was drawn.
+        if item.r < 4 {
+          ctx.fill(Path(ellipseIn: rect), with: .color(item.b.group.color.opacity(alpha)))
+          continue
         }
-        ctx.stroke(Path(ellipseIn: rect), with: .color(item.b.group.color.opacity(alpha)), lineWidth: 1.5)
+        // Body （第八轮）: one drawImage of the spec's pre-baked face —
+        // icon clip, favicon backing, letter tile and rim were all
+        // baked in at spec time, and the source bitmap is already
+        // small, so the GPU-side scale is the only per-frame cost.
+        // The frame's depth / focus alpha rides on the context, which
+        // also unifies the old asymmetry (icon bodies used to stay
+        // opaque on the back face while their rims faded).
+        var bc = ctx
+        bc.opacity = alpha
+        bc.draw(Image(uiImage: item.b.baked), in: rect)
         // name under the bigger front bubbles — always drawn （第七轮）,
-        // within the frame's label budget; the string is the spec's
-        // precomputed displayLabel, so this is a draw, not a computation
-        if labelIndices.contains(idx) {
-          ctx.draw(Text(item.b.displayLabel).font(.system(size: 9, weight: .medium)).foregroundStyle(.primary.opacity(alpha)),
-                   at: CGPoint(x: item.c.x, y: item.c.y + item.r + 8), anchor: .center)
+        // within the frame's label budget; the bitmap was typeset at
+        // spec time （第八轮）, so this is again a draw, not a layout
+        if labelIndices.contains(idx), let label = scheme == .dark ? item.b.labelDark : item.b.labelLight {
+          var lc = ctx
+          lc.opacity = alpha
+          lc.draw(Image(uiImage: label), at: CGPoint(x: item.c.x, y: item.c.y + item.r + 8), anchor: .center)
         }
       }
     }

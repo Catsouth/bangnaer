@@ -655,6 +655,63 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
    派生是启发式：双段后缀表未覆盖的小众后缀（如 .com.br）会取错
    一段，属可接受偏差，后续按真机样本补表。
 
+### 第八轮细化（2026-11-24，构建号 1032 真机验收反馈，本地提交未推送）
+
+用户原话：「滑着滑着还是会停顿，你分析下」。第七轮后真机拖动仍有
+周期性停顿。病因确诊：前七轮的规格缓存只省了数据计算，省不了绘制
+本身——Canvas 逐帧对约 153 个气泡做「裁圆 + 缩放绘制原始大图
+（图标原图可达 288px 解码上限）+ 描边 + Text 排版」，120Hz 屏幕
+每秒重做一万多次，帧预算爆掉。本轮全部改动在 SphereMap.swift，
+走「规格阶段预合成、逐帧只剩 drawImage」的路子：
+
+1. **图标预合成（SphereBaker + BubbleFace）**：computeBubbles 阶段
+   把每个气泡的脸离屏预渲染成位图存入 `SphereBubble.baked`：
+   ImageRenderer 渲染 BubbleFace（80pt 直径 @2x = 160px；气泡最大
+   绘制直径 = 2×baseR(≤24)×投影 scale(≤1.45) ≈ 70pt，此口径覆盖，
+   @3x 极端时 GPU 轻微放大）。烘焙内容 = 圆形裁剪后的图标（favicon
+   白底盘 + 0.14 直径内缩、内置/自定义图标铺满）或品牌色字母块
+   （色盘 + displayLabel 首字母），组色描边一并烘焙（strokeBorder
+   内描边 2.5pt）。逐帧只剩对预合成位图的一次 drawImage + 深度/
+   聚焦 alpha 经 `GraphicsContext.opacity` 施加——顺带统一了旧的
+   不对称：图标本体过去在背面不跟随 alpha 变淡（只有描边淡），
+   现在整颗气泡一致变淡；字母块底色过去有 (0.30+0.70t) 的深度
+   因子，烘焙后取满值、只走 alpha，正面观感不变、背面略实。
+   图标 key 也在规格阶段算好（过去逐帧逐气泡算）。烘焙缓存
+   （SphereBaker.bubbleCache）键含账号 id/图标 key+有无/名称/域名/
+   组/首字母，任一输入变化自动烘新图；缓存不淘汰（一账号状态
+   一张小图，账号编辑稀少）。
+2. **图标未就绪的补烘焙**：规格计算时图标还在途的，先烘字母块，
+   并经 `SphereBaker.ensureLoad` 挂 IconStore 现有 load 回调
+   （每 key 只挂一次，failed 的不挂）；图标落地后回调把一波到达
+   合并成一次 revision 自增（150ms 去抖），MapView 的
+   `onChange(of: baker.revision)` 触发 refreshBubbles 补烘——已烘
+   的全走缓存命中，只有新图标真正重烘。不新造加载机制，Model 的
+   prefetch 仍是主通道。
+3. **标签预渲染**：displayLabel 在规格阶段按固定字号（9pt medium，
+   @3x）预渲染成透明底位图，明暗各一张存入规格（黑字/白字，对应
+   逐帧 .primary），canvas 按 colorScheme 选图 drawImage，替代
+   逐帧 Text 排版；每帧最多画 48 个的上限口径保留（r>=16、z>0.1、
+   按 z 取最前）。
+4. **帧率上限**：spin 的 TimelineView 加
+   `minimumInterval: 1/60`，120Hz 降 60fps，单帧预算翻倍；拖动与
+   惯性是手势/事件驱动，手感不受影响。
+5. **背面剔除**：投影半径 < 4pt 的气泡逐帧只画一个组色小圆点，
+   不画位图与标签。点击命中不受影响——tap() 本就基于规格数据
+   投影判定，不依赖绘制内容。
+6. **顺手小修**：SphereLabel 主标签纯数字时（yun.139.com 取到
+   139）不再回退原始域名串，改取最左段派生（→Yun；最左段为
+   www 或同样纯数字才放弃）；friendlyName 拆出 friendlyLabel
+   复用 xn-- 解码/首字母大写逻辑。
+
+保持不变：四元数转动与惯性、聚焦/连线、名称常显口径、其余页面。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮确认（改动自包含于
+SphereMap.swift；SphereBubble 新增三个字段仅 computeBubbles 一处
+构造；ImageRenderer/@ObservedObject 的隔离标注按本仓既有
+IconStore 调用惯例处理）。烘焙图内存约 153×160×160×4B ≈ 16MB，
+可接受。若真机仍卡，下一招是 Metal/SpriteKit 级重写（脱离 Canvas
+逐帧绘制模型），本轮未做。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；
