@@ -324,6 +324,72 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
   选择器对本地 json 反复点不动（已复现三次），绕开选择器；智能导入格式不在此
   通道处理。
 
+### 补丁批（已实现，2026-11-23，第三批真机验收反馈，共七条，本地提交未推送）
+
+1. **服务行左滑/长按三动作**（Components.swift 新增 `AccountRow` / `AccountMenu` /
+   `AccountSwipeActions`；SitesView、WalletView Timeline、Details 身份详情换用）
+   - ScrollView 系列表（全部 App、卡包时间线、身份详情的服务列表）没有原生
+     swipeActions，用自绘 `AccountRow`：行内 Button 外包一层水平 DragGesture
+     （纵向占优的拖动忽略、归还滚动），左滑露出纯图标按钮（54pt/个）——
+     打开网站（safari，蓝）/ 编辑（pencil，灰）/ 删除（trash，红，走
+     `deleteAccountToTrash` 进回收站）；按钮只带无障碍标签、无可见文字。
+     ReelRow 的玻璃底是半透明的，行底垫了一层不透明 systemBackground 圆角，
+     防止关闭时按钮透出。无域名时打开网站不出现、条宽按 2 个按钮算（与详情页
+     「前往登录」同口径：cleanDomain 为空即禁用）。
+   - List 系列表（全局搜索、账号体检明细）用原生 `.swipeActions` 同构实现
+     （声明顺序保证视觉左→右同为 打开网站/编辑/删除，allowsFullSwipe 关）。
+   - 长按统一挂 `AccountMenu`（contextMenu，带文字三项）；卡包 AppGrid 的
+     图标格也补了同一长按菜单。行点按进详情不变；滑动条打开时点行只关条。
+   - **取舍**：换绑清单的行是勾选语义（一行=一个待换绑项，点按切换完成态），
+     不是普通服务行，未加滑动/长按删除，避免误触把清单项删掉。
+2. **关系图页头部**（SphereMap.swift）
+   - `.navigationTitle("关系图")` 改为空标题（其他页标题不受影响，顶栏 + 菜单保留）；
+     图例 chip 从底部移到球体上方安全区内（topLeading，顶距 10），字号 12→13、
+     圆点 8→9、内边距加大；提示文案随图例一起上移（只出现一次）。
+3. **底栏改造**（AtlasApp.swift RootView；Settings.swift 加 `embedded` 标志）
+   - 胶囊内四个页签：卡包 / 全部 App / 关系图 / **设置**（gear 图标下带「设置」
+     二字，与其余页签同为图标+10pt 文字）；右侧圆钮只剩搜索，设置圆钮删除。
+   - 设置改为 TabView 第四个 tab 的根视图（SettingsSheet(embedded: true)，
+     embedded 时不显示 sheet 用的「完成」按钮）；原 `Route.settings` 与
+     SheetHost 分支保留未删（已无入口指向，截图启动参数 -atlasRoute settings
+     改为直接选第 4 页签）。
+   - 选中药丸：matchedGeometryEffect 沿用，胶囊容器加 `.animation(snappy,
+     value: tab)` 保证任何路径切页药丸都滑动；页签本身不再是 Button，整条
+     胶囊挂一个 DragGesture(minimumDistance: 0)：点按=定位选中，按住横拖=
+     逐格跟随（64pt 步距：4 内边距 + 62 格宽 + 2 间隔），RootView 既有的
+     `.sensoryFeedback(.selection, trigger: tab)` 给每格轻触觉。iOS 17 无
+     Liquid Glass API，仍是 ultraThinMaterial + 高光描边近似，无折射。
+4. **系统底栏彻底隐藏**：`.toolbar(.hidden, for: .tabBar)` 从 TabView 容器
+   （不生效、截图里透出原底栏）改落到四个 tab 各自 NavigationStack 的根内容上
+   （WalletView / SitesView 的 ScrollView、MapView 的 GeometryReader、
+   SettingsSheet 的 Form）；TabView 上的旧修饰已删除。内容区原有 96pt 底部
+   留白是为悬浮玻璃栏留的，不变。
+5. **球体图标缩放与光晕**（SphereMap.swift Canvas）
+   - 图标半径乘系数 `min(1, zoom)`：捏合缩小时图标随球一起小，放大时封顶
+     1 倍正常大小；位置投影仍用真实 zoom。命中测试（tap）用同一封顶后半径，
+     绘制与可点区域一致。
+   - 删掉每个图标外 1.5 倍半径的分组色光晕椭圆填充；分组区分只靠圆环描边。
+6. **搜索打开自动聚焦**（AtlasApp.swift SearchView）
+   - `.searchable` 改用 `isPresented: $searchActive` 绑定；页面 onAppear 后
+     延迟 350ms 置 true（避开 sheet 呈现动画抢焦点——同帧设置会被系统丢弃，
+     这是真机上键盘不弹的根因）；用户点搜索栏「取消」使 isPresented 变 false
+     时顺手 dismiss 整个搜索页。验收口径：点底栏搜索圆钮 → 页面出现 → 键盘
+     随即弹出、光标在输入框，一次点按完成。
+7. **图例 chip 点按聚焦 + 长按丝滑化**（SphereMap.swift）
+   - focus 状态统一为一个枚举 `SphereFocus`（.identity(String) / .group(
+     SphereGroup)）：演示脚本经 demoFocus 写的还是 identity 分支，chip 点按
+     写 group 分支，Canvas 淡化（非聚焦 0.22）只读这一个状态，不再有两套。
+     点 chip = 聚焦该组（chip 呈选中态：组色 28% 底 + 组色描边），再点同一
+     chip 或点球面空白处（tap 未命中任何气泡时）取消聚焦。
+   - 长按卡顿根因是手势抢识别：原先拖动/捏合/长按三个 simultaneousGesture
+     挂在整个 ZStack 上，长按 chip 时 chip 的 contextMenu 与整页长按（弹
+     confirmationDialog）同时触发、互相闪。现在：手势只挂球体本身，图例在
+     手势区之外、chip 的 contextMenu 独立工作；球面长按改 highPriorityGesture
+     （拖动等它落判）+ GestureState 的 updating，**识别成功的一刻**（手指未抬）
+     经 onChange 触发 fireAddMenu（先 commitSpin 冻住球、清手势状态再呈现），
+     全程只有一个呈现路径。拖动侧配套加了起始位移补偿（dragOrigin）：等长按
+     落判的那段位移不计入旋转，球不会在起转瞬间跳一下。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

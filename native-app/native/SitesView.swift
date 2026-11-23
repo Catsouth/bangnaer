@@ -23,7 +23,7 @@ struct SitesView: View {
                     Text("\(list.count)").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
                   }.padding(.top, 18).padding(.leading, 4)
                   ForEach(list) { a in
-                    Button { store.route = .account(a.id) } label: { ReelRow(account: a) }.buttonStyle(PressStyle(scale: 0.98))
+                    AccountRow(account: a) { store.route = .account(a.id) }
                   }
                 }
               }
@@ -39,6 +39,7 @@ struct SitesView: View {
       .navigationTitle("网站与 App")
       .searchable(text: $query, prompt: "搜索名称、域名、账号名")
       .toolbar { TopButtons() }
+      .toolbar(.hidden, for: .tabBar)
       .background(Glow().ignoresSafeArea())
     }
   }

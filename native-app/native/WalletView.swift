@@ -20,6 +20,7 @@ struct WalletView: View {
       .scrollIndicators(.hidden)
       .background(Glow().ignoresSafeArea())
       .toolbar { TopButtons() }
+      .toolbar(.hidden, for: .tabBar)
     }
   }
 
@@ -98,7 +99,7 @@ struct Glow: View {
 /// Top bar of the three main tabs: only the + menu stays (third batch UI rule).
 /// The moon (theme) moved into 设置 → 外观 (the picker already lived there; the quick
 /// toggle is gone so settings is the single home), and the … button that opened the
-/// settings sheet is replaced by the settings button in the floating bottom bar.
+/// settings sheet is replaced by the settings tab in the floating bottom bar.
 struct TopButtons: ToolbarContent {
   @Environment(Store.self) var store
   var body: some ToolbarContent {
@@ -193,6 +194,7 @@ struct AppGrid: View {
             }
           }
           .buttonStyle(PressStyle(scale: 0.9))
+          .contextMenu { AccountMenu(account: a) }
           .transition(.scale(scale: 0.4).combined(with: .opacity))
         }
         if more > 0, let i {
@@ -239,7 +241,7 @@ struct Timeline: View {
           dateLabel(day).frame(width: 44)
           VStack(spacing: 8) {
             ForEach(items) { a in
-              Button { store.route = .account(a.id) } label: { ReelRow(account: a, meta: a.category) }.buttonStyle(PressStyle(scale: 0.98))
+              AccountRow(account: a, meta: a.category) { store.route = .account(a.id) }
             }
           }
         }

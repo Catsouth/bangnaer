@@ -67,3 +67,9 @@
 "缺少域名的服务" = "Services Missing a Domain";
 "值重复的身份卡" = "Identity Cards with Duplicate Values";
 "这个身份还没有绑定的服务。" = "No services are bound to this identity yet.";
+
+/* Patch batch: row actions / settings tab */
+"打开网站" = "Open Website";
+"编辑" = "Edit";
+"删除" = "Delete";
+"设置" = "Settings";

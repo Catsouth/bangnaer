@@ -561,6 +561,121 @@ struct ReelRow: View {
   }
 }
 
+/// Long-press menu for a service (patch batch): the same three actions as the swipe
+/// strip, but with text — 打开网站 / 编辑 / 删除. Used on rows and grid tiles alike.
+/// 打开网站 follows the detail page's rule: it only appears when the service has a domain.
+struct AccountMenu: View {
+  @Environment(Store.self) var store
+  @Environment(\.openURL) var openURL
+  let account: Account
+  var body: some View {
+    Group {
+      let d = cleanDomain(account.domain)
+      if !d.isEmpty {
+        Button { if let u = URL(string: "https://" + d) { openURL(u) } } label: { Label("打开网站", systemImage: "safari") }
+      }
+      Button { store.route = .editAccount(account.id) } label: { Label("编辑", systemImage: "pencil") }
+      Button(role: .destructive) { store.deleteAccountToTrash(account) } label: { Label("删除", systemImage: "trash") }
+    }
+  }
+}
+
+/// Native List twin of AccountRow's swipe strip: icon-only buttons, declared so the
+/// visual order matches the custom strip (left→right: 打开网站 / 编辑 / 删除).
+struct AccountSwipeActions: ViewModifier {
+  @Environment(Store.self) var store
+  @Environment(\.openURL) var openURL
+  let account: Account
+  func body(content: Content) -> some View {
+    content.swipeActions(edge: .trailing, allowsFullSwipe: false) {
+      Button(role: .destructive) { store.deleteAccountToTrash(account) } label: { Image(systemName: "trash") }
+      Button { store.route = .editAccount(account.id) } label: { Image(systemName: "pencil") }.tint(Color(hex: "#636366"))
+      let d = cleanDomain(account.domain)
+      if !d.isEmpty {
+        Button { if let u = URL(string: "https://" + d) { openURL(u) } } label: { Image(systemName: "safari") }.tint(Color(hex: "#0a84ff"))
+      }
+    }
+  }
+}
+extension View {
+  func accountSwipeActions(_ account: Account) -> some View { modifier(AccountSwipeActions(account: account)) }
+}
+
+/// A service row with swipe-to-reveal actions (patch batch), for the ScrollView-based
+/// lists (全部 App, 卡包 timeline, identity detail) where .swipeActions doesn't exist.
+/// Swipe left exposes icon-only buttons — 打开网站 (safari) / 编辑 (pencil) / 删除
+/// (trash, into the recycle bin) — with accessibility labels instead of visible text;
+/// long-press gives the same actions with text via AccountMenu. Tapping the row still
+/// opens the detail (or closes the strip when it's open).
+struct AccountRow: View {
+  @Environment(Store.self) var store
+  @Environment(\.openURL) var openURL
+  let account: Account
+  var meta: String? = nil
+  let onOpen: () -> Void
+  @State private var offset: CGFloat = 0
+  @State private var revealed = false
+
+  var domain: String { cleanDomain(account.domain) }
+  var actionWidth: CGFloat { domain.isEmpty ? 108 : 162 }   // 54pt per icon-only button
+
+  var body: some View {
+    ZStack(alignment: .trailing) {
+      HStack(spacing: 0) {
+        if !domain.isEmpty {
+          stripButton("safari", fill: Color(hex: "#0a84ff"), label: "打开网站") { openSite(); close() }
+        }
+        stripButton("pencil", fill: Color(hex: "#636366"), label: "编辑") { close(); store.route = .editAccount(account.id) }
+        stripButton("trash", fill: Color(hex: "#ff453a"), label: "删除") { store.deleteAccountToTrash(account) }
+      }
+      .frame(width: actionWidth)
+      .frame(maxHeight: .infinity)
+      Button {
+        if revealed { close() } else { onOpen() }
+      } label: {
+        ReelRow(account: account, meta: meta)
+          // ReelRow's own wash is translucent; this opaque base keeps the action
+          // strip from bleeding through it while the row is closed
+          .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(UIColor.systemBackground)))
+      }
+      .buttonStyle(PressStyle(scale: 0.98))
+      .offset(x: offset)
+      .contextMenu { AccountMenu(account: account) }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .simultaneousGesture(swipeGesture)
+    .sensoryFeedback(.impact(weight: .light), trigger: revealed)
+  }
+
+  func stripButton(_ icon: String, fill: Color, label: String, _ fn: @escaping () -> Void) -> some View {
+    Button(action: fn) {
+      Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
+        .frame(width: 54).frame(maxHeight: .infinity)
+        .background(fill)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(label)
+  }
+  func openSite() { if let u = URL(string: "https://" + domain) { openURL(u) } }
+  func close() { withAnimation(Motion.snappy) { revealed = false; offset = 0 } }
+
+  // Horizontal-only: a vertical-dominant drag belongs to the ScrollView and is ignored.
+  var swipeGesture: some Gesture {
+    DragGesture(minimumDistance: 12)
+      .onChanged { v in
+        guard abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
+        let base: CGFloat = revealed ? -actionWidth : 0
+        offset = min(0, max(-actionWidth, base + v.translation.width))
+      }
+      .onEnded { v in
+        let base: CGFloat = revealed ? -actionWidth : 0
+        let target = base + v.predictedEndTranslation.width < -actionWidth / 2
+        withAnimation(Motion.snappy) { revealed = target; offset = target ? -actionWidth : 0 }
+      }
+  }
+}
+
 // press feedback that feels like a card being pushed
 struct PressStyle: ButtonStyle {
   var scale: CGFloat = 0.96

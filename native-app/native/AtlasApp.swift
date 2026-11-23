@@ -85,11 +85,14 @@ struct RootView: View {
       WalletView().tabEnter(0, tab: tab, dir: dir).tag(0).tabItem { Label("卡包", systemImage: "rectangle.stack.fill") }
       SitesView().tabEnter(1, tab: tab, dir: dir).tag(1).tabItem { Label("全部 App", systemImage: "square.grid.2x2.fill") }
       MapView().tabEnter(2, tab: tab, dir: dir).tag(2).tabItem { Label("关系图", systemImage: "point.3.connected.trianglepath.dotted") }
+      SettingsSheet(embedded: true).tabEnter(3, tab: tab, dir: dir).tag(3).tabItem { Label("设置", systemImage: "gearshape.fill") }
     }
-    // system tab bar hidden; the floating glass bar below replaces it (iOS 27 style:
-    // liquid-glass capsule + separate round search / settings buttons, approximated
-    // with ultraThinMaterial + highlight stroke + soft shadow on the iOS 17 target)
-    .toolbar(.hidden, for: .tabBar)
+    // The system tab bar is hidden per tab, on each NavigationStack's root content
+    // (.toolbar(.hidden, for: .tabBar) there — on the TabView itself it does nothing,
+    // the bar bled through the glass in simulator shots). The floating glass bar
+    // below replaces it: liquid-glass capsule with the four tabs + a separate round
+    // search button (iOS 27 style, approximated with ultraThinMaterial + highlight
+    // stroke + soft shadow on the iOS 17 target).
     .overlay(alignment: .bottom) { bottomBar }
     .environment(\.selectedTab, tab)
     .sensoryFeedback(.selection, trigger: tab)
@@ -103,7 +106,7 @@ struct RootView: View {
       switch d.string(forKey: "atlasRoute") {
       case "picker": store.route = .picker(store.active?.id)
       case "identity": if let i = store.active { store.route = .identity(i.id) }
-      case "settings": store.route = .settings
+      case "settings": tab = 3
       case "new": store.route = .newIdentity("email")
       default: break
       }
@@ -155,19 +158,42 @@ struct RootView: View {
 
   var bottomBar: some View {
     HStack(alignment: .center, spacing: 10) {
-      HStack(spacing: 2) {
-        barTab(0, "卡包", "rectangle.stack.fill")
-        barTab(1, "全部 App", "square.grid.2x2.fill")
-        barTab(2, "关系图", "point.3.connected.trianglepath.dotted")
-      }
-      .padding(4)
-      .background { glassCapsule }
+      barCapsule
       Spacer(minLength: 0)
       barCircle("magnifyingglass", label: "搜索") { store.route = .search }
-      barCircle("gearshape.fill", label: "设置") { store.route = .settings }
     }
     .padding(.horizontal, 16)
     .padding(.bottom, 8)
+  }
+
+  // Four tabs in one capsule （卡包 / 全部 App / 关系图 / 设置）; the glass pill under
+  // the selected tab slides via matchedGeometryEffect, and one drag gesture drives
+  // the whole capsule: a tap is a drag that never moved, sliding a finger across
+  // moves the selection segment by segment (RootView's sensoryFeedback on `tab`
+  // gives the light haptic per hop).
+  var barCapsule: some View {
+    HStack(spacing: 2) {
+      barTab(0, "卡包", "rectangle.stack.fill")
+      barTab(1, "全部 App", "square.grid.2x2.fill")
+      barTab(2, "关系图", "point.3.connected.trianglepath.dotted")
+      barTab(3, "设置", "gearshape.fill")
+    }
+    .padding(4)
+    .background { glassCapsule }
+    .contentShape(Capsule())
+    .animation(Motion.snappy, value: tab)
+    .gesture(barDrag)
+  }
+
+  var barDrag: some Gesture {
+    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+      .onChanged { v in selectBar(at: v.location.x) }
+      .onEnded { v in selectBar(at: v.location.x) }
+  }
+  func selectBar(at x: CGFloat) {
+    // capsule geometry: 4pt padding, then 62pt cells with 2pt gaps (64pt step)
+    let t = min(3, max(0, Int((x - 4) / 64)))
+    if t != tab { go(t) }
   }
 
   var glassCapsule: some View {
@@ -187,23 +213,22 @@ struct RootView: View {
 
   func barTab(_ t: Int, _ name: String, _ icon: String) -> some View {
     let on = tab == t
-    return Button { go(t) } label: {
-      VStack(spacing: 2) {
-        Image(systemName: icon).font(.system(size: 19, weight: .semibold))
-        Text(name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
-      }
-      .foregroundStyle(on ? Color.primary : Color.secondary)
-      .frame(width: 64, height: 46)
-      .background {
-        if on {
-          Capsule().fill(Color.primary.opacity(0.10))
-            .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.6))
-            .matchedGeometryEffect(id: "barThumb", in: barNS)
-        }
-      }
-      .contentShape(Capsule())
+    return VStack(spacing: 2) {
+      Image(systemName: icon).font(.system(size: 19, weight: .semibold))
+      Text(name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
     }
-    .buttonStyle(PressStyle(scale: 0.94))
+    .foregroundStyle(on ? Color.primary : Color.secondary)
+    .frame(width: 62, height: 46)
+    .background {
+      if on {
+        Capsule().fill(Color.primary.opacity(0.10))
+          .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.6))
+          .matchedGeometryEffect(id: "barThumb", in: barNS)
+      }
+    }
+    .contentShape(Capsule())
+    .accessibilityLabel(name)
+    .accessibilityAddTraits(on ? [.isSelected] : [])
   }
 
   func barCircle(_ icon: String, label: String, _ fn: @escaping () -> Void) -> some View {
@@ -224,6 +249,7 @@ struct SearchView: View {
   @Environment(Store.self) var store
   @Environment(\.dismiss) var dismiss
   @State private var query = ""
+  @State private var searchActive = false
 
   var results: [Account] {
     let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -244,6 +270,8 @@ struct SearchView: View {
         ForEach(results) { a in
           Button { store.route = .account(a.id) } label: { ReelRow(account: a) }
             .buttonStyle(PressStyle(scale: 0.98))
+            .accountSwipeActions(a)
+            .contextMenu { AccountMenu(account: a) }
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
@@ -252,7 +280,14 @@ struct SearchView: View {
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
       .background(Glow().ignoresSafeArea())
-      .searchable(text: $query, prompt: "搜索名称、域名、账号名")
+      .searchable(text: $query, isPresented: $searchActive, prompt: "搜索名称、域名、账号名")
+      .onAppear {
+        // Pull the keyboard up with the sheet (patch batch): flipping search active
+        // a beat after the presentation settles — setting it in the same frame races
+        // the sheet animation and the focus request is silently dropped.
+        Task { try? await Task.sleep(for: .milliseconds(350)); searchActive = true }
+      }
+      .onChange(of: searchActive) { _, on in if !on { dismiss() } }
       .navigationTitle("搜索").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
     }

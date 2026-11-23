@@ -38,6 +38,14 @@ enum SphereGroup: Int, CaseIterable {
   }
 }
 
+/// One focus state for the sphere (patch batch): an identity (the demo scripts set
+/// it through store.demoFocus) or a whole legend group (chip tap). The canvas
+/// dimming reads only this, so the two sources can never fight or drift apart.
+enum SphereFocus: Equatable {
+  case identity(String)
+  case group(SphereGroup)
+}
+
 struct Vec3 { var x: Double, y: Double, z: Double }
 
 struct SphereBubble {
@@ -96,12 +104,14 @@ struct MapView: View {
   @State private var zoom: CGFloat = 1
   // gesture bookkeeping
   @State private var dragBase: (yaw: Double, pitch: Double)? = nil
+  @State private var dragOrigin: CGSize = .zero
   @State private var dragLast: (date: Date, t: CGSize)? = nil
   @State private var dragVel: CGSize = .zero
   @State private var pinchBase: CGFloat? = nil
   @State private var spin: SphereSpin? = nil
   // interaction feedback / menus
-  @State private var focusID: String? = nil
+  @State private var focus: SphereFocus? = nil
+  @GestureState private var pressHeld = false
   @State private var showAddMenu = false
   @State private var tapTick = 0
   @State private var pressTick = 0
@@ -137,21 +147,25 @@ struct MapView: View {
               .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(40)
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           } else {
+            // Gestures live on the sphere itself, NOT on the whole tab (patch batch):
+            // the legend chips keep their own tap / long-press and never fight the
+            // canvas for recognition — that fight was the long-press flicker.
             sphere(in: geo.size)
-            legend.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-              .padding(.leading, 16).padding(.bottom, 108)
+              .contentShape(Rectangle())
+              .simultaneousGesture(dragGesture)
+              .simultaneousGesture(pinchGesture)
+              .highPriorityGesture(longPressGesture)
+              .onTapGesture { loc in tap(at: loc, in: geo.size) }
+            legend.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+              .padding(.leading, 16).padding(.top, 10)
               .allowsHitTesting(true)
           }
         }
         .frame(width: geo.size.width, height: geo.size.height)
-        .contentShape(Rectangle())
-        .simultaneousGesture(dragGesture)
-        .simultaneousGesture(pinchGesture)
-        .simultaneousGesture(longPressGesture)
-        .onTapGesture { loc in tap(at: loc, in: geo.size) }
       }
-      .navigationTitle("关系图")
+      .navigationTitle("")
       .toolbar { TopButtons() }
+      .toolbar(.hidden, for: .tabBar)
       .background(Glow().ignoresSafeArea())
       .sensoryFeedback(.selection, trigger: tapTick)
       .sensoryFeedback(.impact(weight: .light), trigger: pressTick)
@@ -164,8 +178,9 @@ struct MapView: View {
       iconTick &+= 1
     }
     .onChange(of: store.demoFocus) { _, f in
-      withAnimation(Motion.smooth) { focusID = f == "none" ? nil : f }
+      withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
+    .onChange(of: pressHeld) { _, held in if held { fireAddMenu() } }
     .confirmationDialog("添加身份", isPresented: $showAddMenu, titleVisibility: .visible) {
       Button("添加邮箱") { store.route = .newIdentity("email") }
       Button("添加手机号") { store.route = .newIdentity("phone") }
@@ -211,22 +226,26 @@ struct MapView: View {
       ctx.stroke(Path(ellipseIn: disc), with: .color(.primary.opacity(0.07)), lineWidth: 1)
 
       struct P { let b: SphereBubble; let c: CGPoint; let r: CGFloat; let z: Double }
+      // Pinch out shrinks the icons with the ball; pinch in never blows them past
+      // their normal size — positions still project with the real zoom (patch batch).
+      let iconScale = min(1.0, Double(zoom))
       var ps: [P] = specs.map { b in
         let p = SphereMath.project(b.dir, yaw: yaw, pitch: pitch, radius: R)
         let t = (p.z + 1) / 2
-        let r = b.baseR * CGFloat(p.scale) * CGFloat(0.7 + 0.3 * t)
+        let r = b.baseR * CGFloat(p.scale) * CGFloat(0.7 + 0.3 * t) * CGFloat(iconScale)
         return P(b: b, c: CGPoint(x: center.x + CGFloat(p.x), y: center.y + CGFloat(p.y)), r: r, z: p.z)
       }
       ps.sort { $0.z < $1.z }   // back bubbles first
       for item in ps {
         let t = (item.z + 1) / 2
         var alpha = 0.10 + 0.90 * pow(t, 1.4)
-        if let focusID, !item.b.account.identityIds.contains(focusID) { alpha *= 0.22 }
+        let dimmed: Bool = switch focus {
+        case .identity(let fid): !item.b.account.identityIds.contains(fid)
+        case .group(let g): item.b.group != g
+        case nil: false
+        }
+        if dimmed { alpha *= 0.22 }
         let rect = CGRect(x: item.c.x - item.r, y: item.c.y - item.r, width: item.r * 2, height: item.r * 2)
-        // group-colour halo
-        let glowR = item.r * 1.5
-        ctx.fill(Path(ellipseIn: CGRect(x: item.c.x - glowR, y: item.c.y - glowR, width: glowR * 2, height: glowR * 2)),
-                 with: .color(item.b.group.color.opacity(0.26 * alpha)))
         // body: the service icon when decoded, else a brand-colour letter tile
         let key = IconStore.shared.key(name: item.b.account.name, domain: item.b.account.domain, icon: item.b.account.icon)
         if let entry = IconStore.shared.cached(key) {
@@ -261,20 +280,25 @@ struct MapView: View {
         if dragBase == nil {
           commitSpin()
           dragBase = (yaw, pitch)
+          // The high-priority long-press gets first refusal, so a drag only starts
+          // once the finger has moved a little; absorbing that first stretch keeps
+          // the ball from jumping when rotation kicks in (patch batch).
+          dragOrigin = v.translation
           dragVel = .zero
           dragLast = nil
         }
         let b = dragBase!
-        yaw = b.yaw + Double(v.translation.width) * Self.radPerPoint
-        pitch = clampPitch(b.pitch + Double(v.translation.height) * Self.radPerPoint)
+        let t = CGSize(width: v.translation.width - dragOrigin.width, height: v.translation.height - dragOrigin.height)
+        yaw = b.yaw + Double(t.width) * Self.radPerPoint
+        pitch = clampPitch(b.pitch + Double(t.height) * Self.radPerPoint)
         if let last = dragLast {
           let dt = v.time.timeIntervalSince(last.date)
           if dt > 0.016 {
-            dragVel = CGSize(width: (v.translation.width - last.t.width) / CGFloat(dt),
-                             height: (v.translation.height - last.t.height) / CGFloat(dt))
+            dragVel = CGSize(width: (t.width - last.t.width) / CGFloat(dt),
+                             height: (t.height - last.t.height) / CGFloat(dt))
           }
         }
-        dragLast = (v.time, v.translation)
+        dragLast = (v.time, t)
       }
       .onEnded { _ in
         dragBase = nil
@@ -297,13 +321,23 @@ struct MapView: View {
       .onEnded { _ in pinchBase = nil }
   }
 
+  // High priority over the drag, and it fires the moment the press is recognised
+  // (finger still down, via the GestureState → onChange path in body) instead of
+  // waiting for the finger to lift: hold → menu, no competing recogniser, no flicker.
   var longPressGesture: some Gesture {
-    LongPressGesture(minimumDuration: 0.5, maximumDistance: 12)
-      .onEnded { _ in
-        lastLongPress = Date()
-        pressTick &+= 1
-        showAddMenu = true
-      }
+    LongPressGesture(minimumDuration: 0.45, maximumDistance: 12)
+      .updating($pressHeld) { value, state, _ in state = value }
+  }
+
+  func fireAddMenu() {
+    guard !showAddMenu else { return }
+    commitSpin()               // freeze the ball where it is before the menu covers it
+    dragBase = nil
+    dragLast = nil
+    pinchBase = nil
+    lastLongPress = Date()
+    pressTick &+= 1
+    showAddMenu = true
   }
 
   func tap(at loc: CGPoint, in size: CGSize) {
@@ -318,13 +352,18 @@ struct MapView: View {
       let p = SphereMath.project(b.dir, yaw: ang.yaw, pitch: clampPitch(ang.pitch), radius: R)
       guard p.z > -0.05 else { continue }   // back side can't be tapped
       let t = (p.z + 1) / 2
-      let r = Double(b.baseR) * p.scale * (0.7 + 0.3 * t) + 6
+      // same radius the canvas draws with (incl. the min(1, zoom) icon cap), + slack
+      let r = Double(b.baseR) * p.scale * (0.7 + 0.3 * t) * min(1.0, Double(zoom)) + 6
       let d = hypot(Double(loc.x - center.x) - p.x, Double(loc.y - center.y) - p.y)
       if d <= r && (best == nil || p.z > best!.z) { best = (b.account.id, p.z) }
     }
     if let best {
       tapTick &+= 1
       store.route = .account(best.id)
+    } else if focus != nil {
+      // tapping empty sphere clears a chip / demo focus (patch batch)
+      withAnimation(Motion.smooth) { focus = nil }
+      tapTick &+= 1
     }
   }
 
@@ -343,22 +382,38 @@ struct MapView: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 8) {
         ForEach(SphereGroup.allCases.filter { $0 != .none || (groupCounts[.none] ?? 0) > 0 }, id: \.rawValue) { g in
-          HStack(spacing: 5) {
-            Circle().fill(g.color).frame(width: 8, height: 8)
-            Text(g.name).font(.system(size: 12, weight: .semibold))
-            Text("\(groupCounts[g] ?? 0)").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-          }
-          .padding(.horizontal, 10).padding(.vertical, 6)
-          .background(.glass, in: Capsule())
-          .contentShape(Capsule())
-          .contextMenu {
-            Button { store.route = .newIdentity("email") } label: { Label("添加邮箱", systemImage: "envelope") }
-            Button { store.route = .newIdentity("phone") } label: { Label("添加手机号", systemImage: "simcard") }
-            Button { store.route = .newIdentity("login") } label: { Label("添加登录账号", systemImage: "person.badge.key") }
-          }
+          chip(g)
         }
       }
       Text("拖动旋转 · 捏合缩放 · 长按添加身份").font(.system(size: 11)).foregroundStyle(.secondary)
+    }
+  }
+
+  /// A chip is a focus toggle (patch batch): tap it and the sphere keeps only that
+  /// group lit (same 0.22 dimming as the identity focus); tap it again — or tap
+  /// empty sphere — to clear. Long-press keeps its add-identity context menu, now
+  /// served by the chip itself so it never races the sphere's gestures.
+  func chip(_ g: SphereGroup) -> some View {
+    let on = focus == .group(g)
+    return Button {
+      withAnimation(Motion.smooth) { focus = on ? nil : .group(g) }
+      tapTick &+= 1
+    } label: {
+      HStack(spacing: 5) {
+        Circle().fill(g.color).frame(width: 9, height: 9)
+        Text(g.name).font(.system(size: 13, weight: .semibold))
+        Text("\(groupCounts[g] ?? 0)").font(.system(size: 13, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
+      }
+      .padding(.horizontal, 11).padding(.vertical, 7)
+      .background(on ? AnyShapeStyle(g.color.opacity(0.28)) : AnyShapeStyle(.glass), in: Capsule())
+      .overlay { if on { Capsule().strokeBorder(g.color.opacity(0.75), lineWidth: 0.8) } }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .contextMenu {
+      Button { store.route = .newIdentity("email") } label: { Label("添加邮箱", systemImage: "envelope") }
+      Button { store.route = .newIdentity("phone") } label: { Label("添加手机号", systemImage: "simcard") }
+      Button { store.route = .newIdentity("login") } label: { Label("添加登录账号", systemImage: "person.badge.key") }
     }
   }
 }

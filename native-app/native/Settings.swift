@@ -10,6 +10,9 @@ struct BackupDoc: FileDocument {
 }
 
 struct SettingsSheet: View {
+  /// true when shown as the fourth bottom-bar tab instead of a sheet (patch batch):
+  /// no 完成 button then — there is nothing to dismiss.
+  var embedded = false
   @Environment(Store.self) var store
   @EnvironmentObject var sync: Sync
   @EnvironmentObject var dav: WebDAV
@@ -99,7 +102,12 @@ struct SettingsSheet: View {
       }
       .tint(.accentColor)
       .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.bold() } }
+      .toolbar {
+        if !embedded {
+          ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.bold() }
+        }
+      }
+      .toolbar(.hidden, for: .tabBar)
       .fileExporter(isPresented: $exporting, document: doc, contentType: .json, defaultFilename: "账号备份-\(Date().formatted(.iso8601.year().month().day()))") { r in
         if case .success = r { store.show("备份已导出") }
       }

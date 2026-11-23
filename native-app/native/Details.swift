@@ -31,7 +31,7 @@ struct IdentityDetail: View {
             section((i.isLogin ? "用它登录的 " : "用它注册或绑定的 ") + "\(accs.count) 个网站与 App")
             VStack(spacing: 8) {
               ForEach(accs) { a in
-                Button { store.route = .account(a.id) } label: { ReelRow(account: a) }.buttonStyle(PressStyle(scale: 0.98))
+                AccountRow(account: a) { store.route = .account(a.id) }
               }
               Button { store.route = .picker(i.id) } label: {
                 Label("添加网站或 App", systemImage: "plus").font(.system(size: 16, weight: .semibold))
@@ -89,7 +89,7 @@ struct IdentityDetail: View {
           section("通过 \(l.kindName) 登录的 \(more.count) 个网站与 App")
           VStack(spacing: 8) {
             ForEach(more) { a in
-              Button { store.route = .account(a.id) } label: { ReelRow(account: a) }.buttonStyle(PressStyle(scale: 0.98))
+              AccountRow(account: a) { store.route = .account(a.id) }
             }
           }.padding(.horizontal, 20)
         }

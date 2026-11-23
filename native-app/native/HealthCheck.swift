@@ -145,6 +145,8 @@ struct HealthListView: View {
     ForEach(list) { a in
       Button { store.route = .account(a.id) } label: { ReelRow(account: a) }
         .buttonStyle(PressStyle(scale: 0.98))
+        .accountSwipeActions(a)
+        .contextMenu { AccountMenu(account: a) }
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
