@@ -76,6 +76,7 @@ struct AtlasApp: App {
 
 struct RootView: View {
   @Environment(Store.self) var store
+  @Environment(\.colorScheme) private var scheme
   @State private var tab = 0
   @State private var dir: CGFloat = 1
   @Namespace private var barNS
@@ -196,25 +197,54 @@ struct RootView: View {
     if t != tab { go(t) }
   }
 
-  var glassCapsule: some View {
+  // Liquid glass （第三轮细化）: iOS 17 has no system glass API, so the bar is
+  // layered by hand — the material pass runs at reduced opacity so page
+  // content visibly drifts underneath while scrolling, a vertical sheen
+  // fakes light falling through the slab (bright at the top, a whisper of
+  // shade at the bottom edge), and the stroke is a specular rim: bright
+  // where light catches the top edge, fading down the sides. Readability
+  // comes from the material's own backdrop blur, not from opacity.
+  func glassFill<S: Shape>(_ shape: S) -> some View {
     ZStack {
-      Capsule().fill(.ultraThinMaterial)
-      Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.7)
+      shape.fill(.ultraThinMaterial).opacity(0.72)
+      shape.fill(LinearGradient(stops: [
+        .init(color: .white.opacity(0.20), location: 0),
+        .init(color: .white.opacity(0.05), location: 0.45),
+        .init(color: .clear, location: 0.7),
+        .init(color: .black.opacity(0.05), location: 1),
+      ], startPoint: .top, endPoint: .bottom))
+      shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.22), .white.opacity(0.10)],
+                                        startPoint: .top, endPoint: .bottom), lineWidth: 1)
     }
-    .shadow(color: .black.opacity(0.20), radius: 16, x: 0, y: 7)
+  }
+  var glassCapsule: some View {
+    glassFill(Capsule()).shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
   }
   var glassCircle: some View {
+    glassFill(Circle()).shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 8)
+  }
+  // The selected tab's thumb is a glass lens, not a solid pill （第三轮细化）:
+  // translucent bright frost with its own specular rim and a soft lift
+  // shadow, floating over the capsule's thinner glass; in dark mode the
+  // frost thins out so the lens stays black glass, never a grey slab. The
+  // accent tint stays on the icon and label, as before.
+  var glassThumb: some View {
     ZStack {
-      Circle().fill(.ultraThinMaterial)
-      Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.7)
+      Capsule().fill(.white.opacity(scheme == .dark ? 0.20 : 0.50))
+      Capsule().fill(LinearGradient(stops: [
+        .init(color: .white.opacity(0.30), location: 0),
+        .init(color: .clear, location: 0.55),
+      ], startPoint: .top, endPoint: .bottom))
+      Capsule().strokeBorder(LinearGradient(colors: [.white.opacity(0.85), .white.opacity(0.30)],
+                                            startPoint: .top, endPoint: .bottom), lineWidth: 0.8)
     }
-    .shadow(color: .black.opacity(0.20), radius: 16, x: 0, y: 7)
+    .shadow(color: .black.opacity(0.16), radius: 7, x: 0, y: 2.5)
   }
 
-  // Tabs follow the reference layout （第二轮细化）: big icon over the label, and
-  // the selected tab is a dark solid pill — near-black in both colour schemes,
-  // so it reads as a filled thumb against the glass — with its icon and label
-  // tinted the app accent. Unselected tabs keep the adaptive primary colour.
+  // Tabs follow the reference layout （第二轮细化）: big icon over the label.
+  // The selected tab sits on the glass lens （glassThumb — translucent frost，
+  // 第三轮细化） with its icon and label tinted the app accent; unselected
+  // tabs keep the adaptive primary colour.
   func barTab(_ t: Int, _ name: String, _ icon: String) -> some View {
     let on = tab == t
     return VStack(spacing: 3) {
@@ -225,9 +255,7 @@ struct RootView: View {
     .frame(width: 64, height: 58)
     .background {
       if on {
-        Capsule().fill(Color(white: 0.10))
-          .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 0.6))
-          .matchedGeometryEffect(id: "barThumb", in: barNS)
+        glassThumb.matchedGeometryEffect(id: "barThumb", in: barNS)
       }
     }
     .contentShape(Capsule())

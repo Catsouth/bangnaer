@@ -8,10 +8,12 @@ import UIKit
 // keeps an exponentially decaying spin), pinch zooms, back-side bubbles fade/shrink and can't
 // be tapped; a front bubble tap opens the account. Bubble rims are coloured by the group of
 // the account's first bound identity: Email / SIM / 自定义 (login), grey when unbound.
-// Long-press (blank area or a legend chip) offers adding an identity right from the map.
+// Long-press on blank area offers adding an identity right from the map; a
+// legend segment's long-press opens that group's identity sheet instead.
 
-enum SphereGroup: Int, CaseIterable {
+enum SphereGroup: Int, CaseIterable, Identifiable {
   case email, sim, custom, none
+  var id: Int { rawValue }
   var name: String {
     switch self {
     case .email: return "Email"
@@ -113,7 +115,9 @@ struct MapView: View {
   @State private var focus: SphereFocus? = nil
   @GestureState private var pressHeld = false
   @State private var showAddMenu = false
-  @State private var lastPinchAt = Date.distantPast   // pinch arbitration （第二轮细化）
+  @State private var pinchSeenInSequence = false   // pinch arbitration （第三轮细化，state machine）
+  @State private var groupSheet: SphereGroup? = nil
+  @State private var pendingAdd: String? = nil
   @State private var tapTick = 0
   @State private var pressTick = 0
   @State private var lastLongPress = Date.distantPast
@@ -182,7 +186,26 @@ struct MapView: View {
     .onChange(of: store.demoFocus) { _, f in
       withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
-    .onChange(of: pressHeld) { _, held in if held { fireAddMenu() } }
+    .onChange(of: pressHeld) { _, held in
+      if held { fireAddMenu() }
+      // The press's touch ended (or the press failed after recognising): that
+      // touch's sequence is over, so a pinch taint tied to it can lift.
+      else { pinchSeenInSequence = false }
+    }
+    .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
+      GroupIdentitiesSheet(group: g,
+                           onPick: { i in
+                             withAnimation(Motion.smooth) { focus = .identity(i.id) }
+                             groupSheet = nil
+                           },
+                           onAdd: { t in
+                             pendingAdd = t
+                             groupSheet = nil
+                           })
+        .environment(store)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
     .confirmationDialog("添加身份", isPresented: $showAddMenu, titleVisibility: .visible) {
       Button("添加邮箱") { store.route = .newIdentity("email") }
       Button("添加手机号") { store.route = .newIdentity("phone") }
@@ -238,6 +261,23 @@ struct MapView: View {
         return P(b: b, c: CGPoint(x: center.x + CGFloat(p.x), y: center.y + CGFloat(p.y)), r: r, z: p.z)
       }
       ps.sort { $0.z < $1.z }   // back bubbles first
+      // Focus threads （第三轮细化）: an identity focus connects the centre to
+      // every bubble bound to that identity, in the identity's own colour,
+      // under the bubbles (drawn first, and the canvas never hit-tests anyway).
+      // Alpha follows the same depth curve as the bubbles, so back-side
+      // threads fade out with their bubbles. Group focus draws none — a whole
+      // group threaded at once would be a thicket, not a highlight.
+      if let f = focus, case .identity(let fid) = f, let who = store.identity(fid) {
+        let thread = Color(hex: who.color)
+        for item in ps where item.b.account.identityIds.contains(fid) {
+          let t = (item.z + 1) / 2
+          let a = (0.10 + 0.90 * pow(t, 1.4)) * 0.55
+          var path = Path()
+          path.move(to: center)
+          path.addLine(to: item.c)
+          ctx.stroke(path, with: .color(thread.opacity(a)), lineWidth: 1)
+        }
+      }
       for item in ps {
         let t = (item.z + 1) / 2
         var alpha = 0.10 + 0.90 * pow(t, 1.4)
@@ -311,23 +351,32 @@ struct MapView: View {
           spin = SphereSpin(yaw0: yaw, pitch0: pitch, vx: min(max(vx, -9), 9), vy: min(max(vy, -9), 9), start: Date())
           pressTick &+= 1
         }
+        // "all fingers up" approximation （第三轮细化）: the drag ended and no
+        // pinch is live, so the touch sequence is over and its taint lifts.
+        if pinchBase == nil && !pressHeld { pinchSeenInSequence = false }
       }
   }
 
   var pinchGesture: some Gesture {
     MagnificationGesture()
       .onChanged { s in
-        // Pinch arbitration （第二轮细化）: stamp every pinch activity so the
-        // long-press can tell "a pinch is / was just happening" — and if a menu
-        // was misfired in the plant phase (first finger resting inside the
-        // long-press window before the second finger landed), the pinch that
-        // follows immediately takes over and dismisses it.
-        lastPinchAt = Date()
+        // Pinch arbitration （第三轮细化）: the moment a pinch moves, the whole
+        // touch sequence is marked pinch-tainted — this sequence's long-press
+        // is dead from here on (see fireAddMenu) — and the pinch takes over /
+        // dismisses any menu the plant phase (first finger resting inside
+        // the long-press window before the second finger landed) misfired.
+        pinchSeenInSequence = true
         if showAddMenu { showAddMenu = false }
         if pinchBase == nil { commitSpin(); pinchBase = zoom }
         zoom = min(2.4, max(0.55, (pinchBase ?? 1) * s))
       }
-      .onEnded { _ in pinchBase = nil; lastPinchAt = Date() }
+      .onEnded { _ in
+        pinchBase = nil
+        // "all fingers up" approximation: the pinch ended and nothing else
+        // is holding the sequence (no drag in flight, no press recognised),
+        // so the sequence is over and the taint can lift.
+        if dragBase == nil && !pressHeld { pinchSeenInSequence = false }
+      }
   }
 
   // High priority over the drag, and it fires the moment the press is recognised
@@ -340,14 +389,24 @@ struct MapView: View {
 
   func fireAddMenu() {
     guard !showAddMenu else { return }
-    // Pinch arbitration （第二轮细化）: SwiftUI gestures can't count touches, so
-    // the long-press recognises on its one tracked touch — planting two fingers
-    // (or winding a pinch down slowly) can leave that touch inside the 12pt /
-    // 0.45s window and complete the press mid-pinch. Suppress the menu while a
-    // pinch is active, and for a beat after the last pinch activity; a press
-    // that genuinely starts after a pinch still completes ≥0.45s later, past
-    // the guard window, so single-finger long-press is unchanged.
-    guard pinchBase == nil, Date().timeIntervalSince(lastPinchAt) > 0.35 else { return }
+    // Pinch arbitration (round 3, state machine — replaces round 2's
+    // 0.35s time window, which leaked on device): SwiftUI gestures can't
+    // count touches, so the long-press recognises on its one tracked touch —
+    // planting two fingers, or winding a pinch down slowly and then resting
+    // one finger, completes the press long after any time window expires.
+    // Rule instead: a touch sequence in which a pinch has occurred never
+    // opens the menu. The recognition that trips over the taint is swallowed
+    // AND consumes it, so the next clean press works; the taint also lifts
+    // on the gesture-end signals that approximate "all fingers up" (drag /
+    // pinch / press ended with nothing else live, or a completed tap). The
+    // one residual: a finger resting perfectly motionless after a pinch,
+    // in a sequence where no end signal fires, keeps the taint until its
+    // own late recognition consumes it — i.e. the worst case is one
+    // swallowed press, never a leaked menu.
+    if pinchSeenInSequence {
+      pinchSeenInSequence = false
+      return
+    }
     commitSpin()               // freeze the ball where it is before the menu covers it
     dragBase = nil
     dragLast = nil
@@ -360,6 +419,7 @@ struct MapView: View {
   func tap(at loc: CGPoint, in size: CGSize) {
     // a long-press that just opened the add menu must not also count as a bubble tap
     guard Date().timeIntervalSince(lastLongPress) > 0.6 else { return }
+    pinchSeenInSequence = false   // a completed tap is a finished sequence: taint lifts
     let ang: (yaw: Double, pitch: Double)
     if let spin { ang = spin.rotation(at: Date()) } else { ang = (yaw, pitch) }
     let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
@@ -425,45 +485,125 @@ struct MapView: View {
 
   /// A segment is still a focus toggle: tap it and the sphere keeps only that
   /// group lit (the SphereFocus.group dimming); tap it again — or tap empty
-  /// sphere — to clear. Its long-press context menu is trimmed per group
-  /// （第二轮细化）: Email offers only 添加邮箱， SIM only 添加手机号， 自定义 (and
-  /// 未绑定） keep all three — the sphere's own blank-area long-press menu is
-  /// unchanged and also keeps all three.
+  /// sphere — to clear. Long-press opens the group's identity sheet instead
+  /// （第三轮细化）: the group's existing cards plus its trimmed add entries
+  /// (see GroupIdentitiesSheet). The tap / long-press pair hangs on the label
+  /// view itself, not a Button — a Button fires its action on touch-up even
+  /// when a long-press recogniser completes, which would toggle the focus
+  /// behind the sheet.
   func segment(_ g: SphereGroup) -> some View {
     let on = focus == .group(g)
-    return Button {
+    return HStack(spacing: 5) {
+      Image(systemName: groupIcon(g)).font(.system(size: 13, weight: .semibold))
+      Text(g.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+      Text("\(groupCounts[g] ?? 0)").font(.system(size: 12, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
+    }
+    .frame(maxWidth: .infinity).frame(height: 34)
+    .foregroundStyle(on ? .primary : .secondary)
+    .background {
+      if on {
+        Capsule().fill(g.color.opacity(0.30))
+          .overlay(Capsule().strokeBorder(g.color.opacity(0.55), lineWidth: 0.7))
+          .matchedGeometryEffect(id: "segThumb", in: segNS)
+      }
+    }
+    .contentShape(Rectangle())
+    .onTapGesture {
       withAnimation(Motion.smooth) { focus = on ? nil : .group(g) }
       tapTick &+= 1
-    } label: {
-      HStack(spacing: 5) {
-        Image(systemName: groupIcon(g)).font(.system(size: 13, weight: .semibold))
-        Text(g.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-        Text("\(groupCounts[g] ?? 0)").font(.system(size: 12, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
-      }
-      .frame(maxWidth: .infinity).frame(height: 34)
-      .foregroundStyle(on ? .primary : .secondary)
-      .background {
-        if on {
-          Capsule().fill(g.color.opacity(0.30))
-            .overlay(Capsule().strokeBorder(g.color.opacity(0.55), lineWidth: 0.7))
-            .matchedGeometryEffect(id: "segThumb", in: segNS)
-        }
-      }
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .contextMenu { addMenu(for: g) }
+    .onLongPressGesture(minimumDuration: 0.45) {
+      groupSheet = g
+      pressTick &+= 1
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(g.name) \(groupCounts[g] ?? 0)")
+    .accessibilityAddTraits(on ? [.isButton, .isSelected] : [.isButton])
   }
 
-  @ViewBuilder func addMenu(for g: SphereGroup) -> some View {
-    if g == .email || g == .custom || g == .none {
-      Button { store.route = .newIdentity("email") } label: { Label("添加邮箱", systemImage: "envelope") }
+  /// The group sheet's add entries apply their route only once the sheet has
+  /// fully dismissed — RootView's sheet can't stack over this one.
+  func applyPendingAdd() {
+    guard let t = pendingAdd else { return }
+    pendingAdd = nil
+    store.route = .newIdentity(t)
+  }
+}
+
+/// Add entries per group, trimmed （第二轮细化）: Email offers only 添加邮箱，
+/// SIM only 添加手机号， 自定义 (and 未绑定） keep all three. Shared by the
+/// group sheet; the sphere's own blank-area long-press menu is separate and
+/// also keeps all three.
+struct GroupAddOption: Identifiable {
+  let type: String, title: String, icon: String
+  var id: String { type }
+}
+func groupAddOptions(_ g: SphereGroup) -> [GroupAddOption] {
+  var out: [GroupAddOption] = []
+  if g == .email || g == .custom || g == .none { out.append(GroupAddOption(type: "email", title: "添加邮箱", icon: "envelope")) }
+  if g == .sim || g == .custom || g == .none { out.append(GroupAddOption(type: "phone", title: "添加手机号", icon: "simcard")) }
+  if g == .custom || g == .none { out.append(GroupAddOption(type: "login", title: "添加登录账号", icon: "person.badge.key")) }
+  return out
+}
+
+/// Second-level sheet behind a legend segment's long-press （第三轮细化）: the
+/// group's existing identity cards — label (value when unlabelled), value,
+/// bound-count badge, each in its own skin like the original app's map listed
+/// them down its left column. Tapping a card focuses the sphere on that
+/// identity (threads and all) and closes the sheet; the group's add entries
+/// stay in their own section below.
+struct GroupIdentitiesSheet: View {
+  @Environment(Store.self) var store
+  @Environment(\.dismiss) var dismiss
+  let group: SphereGroup
+  let onPick: (Identity) -> Void
+  let onAdd: (String) -> Void
+
+  var identities: [Identity] { store.data.identities.filter { SphereGroup.of($0) == group } }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        if identities.isEmpty {
+          Section {
+            Text("这一组还没有身份卡").foregroundStyle(.secondary)
+          }
+        } else {
+          Section {
+            ForEach(identities) { i in
+              Button { onPick(i) } label: { row(i) }
+                .buttonStyle(.plain)
+            }
+          }
+        }
+        Section {
+          ForEach(groupAddOptions(group)) { opt in
+            Button { onAdd(opt.type) } label: { Label(opt.title, systemImage: opt.icon) }
+          }
+        }
+      }
+      .navigationTitle(group.name).navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
     }
-    if g == .sim || g == .custom || g == .none {
-      Button { store.route = .newIdentity("phone") } label: { Label("添加手机号", systemImage: "simcard") }
+  }
+
+  func row(_ i: Identity) -> some View {
+    HStack(spacing: 12) {
+      IdentityGlyph(identity: i, size: 15)
+        .foregroundStyle(.white)
+        .frame(width: 42, height: 42)
+        .background(skinGradient(i.color), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(store.title(i)).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+        Text(i.label.isEmpty ? i.kindName : i.value).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+      }
+      Spacer(minLength: 8)
+      Text("\(store.accounts(of: i.id).count)")
+        .font(.system(size: 12, weight: .bold))
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Color(hex: i.color).opacity(0.16), in: Capsule())
+        .foregroundStyle(Color(hex: i.color))
     }
-    if g == .custom || g == .none {
-      Button { store.route = .newIdentity("login") } label: { Label("添加登录账号", systemImage: "person.badge.key") }
-    }
+    .contentShape(Rectangle())
   }
 }

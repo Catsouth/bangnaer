@@ -441,6 +441,64 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
      contentMargins 防新栏遮尾（sheet 模式不加）。卡包/全部 App 原有 96pt
      底部留白仍大于新栏总高（约 74pt），未动。
 
+### 第三轮细化（进行中，2026-11-23，构建号 1026 真机验收反馈，本地提交未推送）
+
+1. **底栏 Liquid Glass 透明化**（AtlasApp.swift glassFill/glassThumb）
+   - 用户批示「改成 ios27 透明」：原胶囊 ultraThinMaterial 满不透明度 +
+     选中药丸 Color(white: 0.10) 实心，深色下是一坨实心黑。iOS 17 无系统
+     Liquid Glass API，改手工分层近似：材质层 opacity 降到 0.72（内容在
+     玻璃下明显透出、滚动时可见流动）；叠一层竖直光泽渐变（顶部白 0.20 →
+     0.45 处 0.05 → 0.7 处透明 → 底部黑 0.05 的微影）模拟光线穿过玻璃；
+     描边改镜面边缘渐变（顶部白 0.75 → 0.22 → 0.10），即顶部高光线 +
+     两侧渐隐。胶囊与搜索圆钮共用同一 glassFill，只是形状不同。
+   - 选中药丸去实心，改「玻璃透镜」glassThumb：半透明白霜填充（浅色
+     0.50 / 深色 0.20，深色下保持黑玻璃不发灰）+ 顶部高光渐变 + 镜面
+     描边（0.85→0.30）+ 柔和抬升阴影（黑 0.16、r7、y2.5）；滑动跟随
+     （matchedGeometryEffect）与拖动切页逻辑未动，选中图标/文字仍染
+     accentColor。可读性靠材质自身的背景模糊，不靠不透明填充。
+
+2. **捏合误弹复修：时间窗改状态机**（SphereMap.swift）
+   - 第二轮的 lastPinchAt + 0.35s 守卫窗真机仍漏：捏合收尾后留一指静止，
+     长按在窗外完成识别照样弹。根因不变（SwiftUI 手势数不到触点数，
+     长按只盯一根触点），口径改为序列级标志 pinchSeenInSequence：
+     捏合 onChanged 一动就置位并收掉已弹菜单；fireAddMenu 见标志直接
+     不弹，且该次识别会把标志消费掉（吞一次、清一次）。
+   - 「全部离屏」SwiftUI 拿不到触点数，用手势结束信号组合近似清标志：
+     拖动 onEnded 且无捏合进行中；捏合 onEnded 且无拖动/长按识别占用；
+     长按 pressHeld 回落（该触点序列结束）；一次点按完成（tap 入口）。
+   - 残留边界：捏合后一根手指完美静止、且整段序列里没有任何结束信号
+     触发时，标志保留到那根手指自己的迟到识别来消费它——最坏结果是
+     一次长按被吞，绝不会把菜单漏进下一次干净的触摸序列。单指长按
+     （序列内无捏合）路径完全不变，不误伤。
+
+3. **分段长按出身份列表表单**（SphereMap.swift segment/GroupIdentitiesSheet）
+   - 原落点是 segment 的 .contextMenu { addMenu(for:) }，只有添加项。
+     改为长按弹 sheet（.medium/.large 两档）：先列该组现有身份卡——
+     IdentityGlyph + skinGradient(identity.color) 着色，标题 store.title
+     （备注名、无备注回退值），副行值（无备注时显示类型名），尾部绑定数
+     角标走 store.accounts(of:) 计数、染身份色；点某张卡 → SphereFocus
+     .identity 聚焦（带第 4 条连线）并关表单。添加入口保留在表单底部
+     独立 Section，按组精简规则抽成共用函数 groupAddOptions（Email 只
+     加邮箱、SIM 只加手机号、自定义/未绑定三项）；该组无身份时显示
+     空态文案「这一组还没有身份卡」+ 添加入口。
+   - 呈现路径隔离：添加的 route 不能叠在组表单之上，onAdd 只记
+     pendingAdd，组表单 onDismiss 后才 store.route 跳转。
+   - segment 本体由 Button 改为普通视图 + onTapGesture/onLongPressGesture
+     组合：Button 在长按识别完成后抬手仍会触发 action，会在表单背后
+     把聚焦切掉；手势对则天然互斥。无障碍补回 .isButton/.isSelected
+     traits 与合并标签。捏合误触不波及此路径：表单只由分段长按打开，
+     分段在球面手势区之外（补丁批已隔离），且第 2 条状态机管的是球面
+     空白长按菜单。
+
+4. **身份聚焦连线**（SphereMap.swift Canvas）
+   - focus 为某个身份（.identity）时，从球心向该身份绑定的每个服务气泡画
+     一条连线，颜色取该身份自己的 color；端点用气泡的投影坐标，在气泡
+     绘制之前画（线在气泡下层），Canvas 本就不参与点按、无遮挡问题。连线
+     透明度沿用气泡的深度曲线（0.10+0.90·t^1.4）再乘 0.55，背面气泡的线
+     随其一起淡出；旋转/缩放/惯性滚动时随投影逐帧重绘。组聚焦（.group，
+     点按分段）不画线——整组连线是满屏线团；取消聚焦（点球面空白）线条
+     随 focus 清空自动消失。演示脚本经 demoFocus 聚焦身份时同样出线。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

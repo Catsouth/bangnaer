@@ -77,3 +77,6 @@
 /* Round 2: sphere group name / form clipboard candidates */
 "未绑定" = "Unbound";
 "自动识别 · 来自剪贴板" = "Auto-recognized · From clipboard";
+
+/* Round 3: segment long-press identity sheet */
+"这一组还没有身份卡" = "No identity cards in this group yet";
