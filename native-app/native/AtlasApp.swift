@@ -204,7 +204,7 @@ struct RootView: View {
   // shade at the bottom edge), and the stroke is a specular rim: bright
   // where light catches the top edge, fading down the sides. Readability
   // comes from the material's own backdrop blur, not from opacity.
-  func glassFill<S: Shape>(_ shape: S) -> some View {
+  func glassFill<S: InsettableShape>(_ shape: S) -> some View {
     ZStack {
       shape.fill(.ultraThinMaterial).opacity(0.72)
       shape.fill(LinearGradient(stops: [
