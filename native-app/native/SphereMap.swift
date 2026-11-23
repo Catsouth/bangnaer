@@ -8,8 +8,10 @@ import UIKit
 // keeps an exponentially decaying spin), pinch zooms, back-side bubbles fade/shrink and can't
 // be tapped; a front bubble tap opens the account. Bubble rims are coloured by the group of
 // the account's first bound identity: Email / SIM / 自定义 (login), grey when unbound.
-// Long-press on blank area offers adding an identity right from the map; a
-// legend segment's long-press opens that group's identity sheet instead.
+// Adding identities lives on the top-right "+" and in the legend segments'
+// long-press identity sheets — the sphere itself takes no long-press at all
+// （第四轮细化）: a blank-area long-press fought the drag rotation past two
+// rounds of arbitration guards, so the gesture was removed outright.
 
 enum SphereGroup: Int, CaseIterable, Identifiable {
   case email, sim, custom, none
@@ -113,14 +115,10 @@ struct MapView: View {
   @State private var spin: SphereSpin? = nil
   // interaction feedback / menus
   @State private var focus: SphereFocus? = nil
-  @GestureState private var pressHeld = false
-  @State private var showAddMenu = false
-  @State private var pinchSeenInSequence = false   // pinch arbitration （第三轮细化，state machine）
   @State private var groupSheet: SphereGroup? = nil
   @State private var pendingAdd: String? = nil
   @State private var tapTick = 0
   @State private var pressTick = 0
-  @State private var lastLongPress = Date.distantPast
   @State private var iconTick = 0
   @Namespace private var segNS
 
@@ -160,7 +158,6 @@ struct MapView: View {
               .contentShape(Rectangle())
               .simultaneousGesture(dragGesture)
               .simultaneousGesture(pinchGesture)
-              .highPriorityGesture(longPressGesture)
               .onTapGesture { loc in tap(at: loc, in: geo.size) }
             legend.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
               .padding(.horizontal, 16).padding(.top, 10)
@@ -186,12 +183,6 @@ struct MapView: View {
     .onChange(of: store.demoFocus) { _, f in
       withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
-    .onChange(of: pressHeld) { _, held in
-      if held { fireAddMenu() }
-      // The press's touch ended (or the press failed after recognising): that
-      // touch's sequence is over, so a pinch taint tied to it can lift.
-      else { pinchSeenInSequence = false }
-    }
     .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
       GroupIdentitiesSheet(group: g,
                            onPick: { i in
@@ -205,12 +196,6 @@ struct MapView: View {
         .environment(store)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-    }
-    .confirmationDialog("添加身份", isPresented: $showAddMenu, titleVisibility: .visible) {
-      Button("添加邮箱") { store.route = .newIdentity("email") }
-      Button("添加手机号") { store.route = .newIdentity("phone") }
-      Button("添加登录账号") { store.route = .newIdentity("login") }
-      Button("取消", role: .cancel) {}
     }
   }
 
@@ -322,9 +307,9 @@ struct MapView: View {
         if dragBase == nil {
           commitSpin()
           dragBase = (yaw, pitch)
-          // The high-priority long-press gets first refusal, so a drag only starts
-          // once the finger has moved a little; absorbing that first stretch keeps
-          // the ball from jumping when rotation kicks in (patch batch).
+          // The drag only starts past its minimum distance; absorbing that
+          // first stretch keeps the ball from jumping when rotation kicks in
+          // (patch batch).
           dragOrigin = v.translation
           dragVel = .zero
           dragLast = nil
@@ -351,75 +336,21 @@ struct MapView: View {
           spin = SphereSpin(yaw0: yaw, pitch0: pitch, vx: min(max(vx, -9), 9), vy: min(max(vy, -9), 9), start: Date())
           pressTick &+= 1
         }
-        // "all fingers up" approximation （第三轮细化）: the drag ended and no
-        // pinch is live, so the touch sequence is over and its taint lifts.
-        if pinchBase == nil && !pressHeld { pinchSeenInSequence = false }
       }
   }
 
   var pinchGesture: some Gesture {
     MagnificationGesture()
       .onChanged { s in
-        // Pinch arbitration （第三轮细化）: the moment a pinch moves, the whole
-        // touch sequence is marked pinch-tainted — this sequence's long-press
-        // is dead from here on (see fireAddMenu) — and the pinch takes over /
-        // dismisses any menu the plant phase (first finger resting inside
-        // the long-press window before the second finger landed) misfired.
-        pinchSeenInSequence = true
-        if showAddMenu { showAddMenu = false }
         if pinchBase == nil { commitSpin(); pinchBase = zoom }
         zoom = min(2.4, max(0.55, (pinchBase ?? 1) * s))
       }
       .onEnded { _ in
         pinchBase = nil
-        // "all fingers up" approximation: the pinch ended and nothing else
-        // is holding the sequence (no drag in flight, no press recognised),
-        // so the sequence is over and the taint can lift.
-        if dragBase == nil && !pressHeld { pinchSeenInSequence = false }
       }
   }
 
-  // High priority over the drag, and it fires the moment the press is recognised
-  // (finger still down, via the GestureState → onChange path in body) instead of
-  // waiting for the finger to lift: hold → menu, no competing recogniser, no flicker.
-  var longPressGesture: some Gesture {
-    LongPressGesture(minimumDuration: 0.45, maximumDistance: 12)
-      .updating($pressHeld) { value, state, _ in state = value }
-  }
-
-  func fireAddMenu() {
-    guard !showAddMenu else { return }
-    // Pinch arbitration (round 3, state machine — replaces round 2's
-    // 0.35s time window, which leaked on device): SwiftUI gestures can't
-    // count touches, so the long-press recognises on its one tracked touch —
-    // planting two fingers, or winding a pinch down slowly and then resting
-    // one finger, completes the press long after any time window expires.
-    // Rule instead: a touch sequence in which a pinch has occurred never
-    // opens the menu. The recognition that trips over the taint is swallowed
-    // AND consumes it, so the next clean press works; the taint also lifts
-    // on the gesture-end signals that approximate "all fingers up" (drag /
-    // pinch / press ended with nothing else live, or a completed tap). The
-    // one residual: a finger resting perfectly motionless after a pinch,
-    // in a sequence where no end signal fires, keeps the taint until its
-    // own late recognition consumes it — i.e. the worst case is one
-    // swallowed press, never a leaked menu.
-    if pinchSeenInSequence {
-      pinchSeenInSequence = false
-      return
-    }
-    commitSpin()               // freeze the ball where it is before the menu covers it
-    dragBase = nil
-    dragLast = nil
-    pinchBase = nil
-    lastLongPress = Date()
-    pressTick &+= 1
-    showAddMenu = true
-  }
-
   func tap(at loc: CGPoint, in size: CGSize) {
-    // a long-press that just opened the add menu must not also count as a bubble tap
-    guard Date().timeIntervalSince(lastLongPress) > 0.6 else { return }
-    pinchSeenInSequence = false   // a completed tap is a finished sequence: taint lifts
     let ang: (yaw: Double, pitch: Double)
     if let spin { ang = spin.rotation(at: Date()) } else { ang = (yaw, pitch) }
     let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
@@ -478,7 +409,7 @@ struct MapView: View {
       .padding(3)
       .background(.glass, in: Capsule())
       .animation(Motion.smooth, value: focus)
-      Text("拖动旋转 · 捏合缩放 · 长按添加身份").font(.system(size: 11)).foregroundStyle(.secondary)
+      Text("拖动旋转 · 捏合缩放 · 长按分段查看身份").font(.system(size: 11)).foregroundStyle(.secondary)
         .padding(.leading, 6)
     }
   }
@@ -532,8 +463,7 @@ struct MapView: View {
 
 /// Add entries per group, trimmed （第二轮细化）: Email offers only 添加邮箱，
 /// SIM only 添加手机号， 自定义 (and 未绑定） keep all three. Shared by the
-/// group sheet; the sphere's own blank-area long-press menu is separate and
-/// also keeps all three.
+/// group sheet.
 struct GroupAddOption: Identifiable {
   let type: String, title: String, icon: String
   var id: String { type }

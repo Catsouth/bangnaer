@@ -80,3 +80,6 @@
 
 /* Round 3: segment long-press identity sheet */
 "这一组还没有身份卡" = "No identity cards in this group yet";
+
+/* Round 4: sphere hint (blank-area long-press add menu removed) */
+"拖动旋转 · 捏合缩放 · 长按分段查看身份" = "Drag to rotate · Pinch to zoom · Long-press a segment to view identities";
