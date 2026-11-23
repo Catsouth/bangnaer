@@ -246,6 +246,14 @@ struct MapView: View {
         return P(b: b, c: CGPoint(x: center.x + CGFloat(p.x), y: center.y + CGFloat(p.y)), r: r, z: p.z)
       }
       ps.sort { $0.z < $1.z }   // back bubbles first
+      // Identity focus （第五轮）: only the bubbles bound to the focused
+      // identity exist at all — the rest are not drawn (and tap() hit-tests
+      // the same filtered set), so the ball shows exactly that identity's
+      // services, threads included. Group focus keeps the dim-everything-else
+      // treatment below; tapping empty sphere clears the focus either way.
+      if let f = focus, case .identity(let fid) = f {
+        ps = ps.filter { $0.b.account.identityIds.contains(fid) }
+      }
       // Focus threads （第三轮细化）: an identity focus connects the centre to
       // every bubble bound to that identity, in the identity's own colour,
       // under the bubbles (drawn first, and the canvas never hit-tests anyway).
@@ -267,7 +275,7 @@ struct MapView: View {
         let t = (item.z + 1) / 2
         var alpha = 0.10 + 0.90 * pow(t, 1.4)
         let dimmed: Bool = switch focus {
-        case .identity(let fid): !item.b.account.identityIds.contains(fid)
+        case .identity: false   // unbound bubbles were filtered out above
         case .group(let g): item.b.group != g
         case nil: false
         }
@@ -333,8 +341,9 @@ struct MapView: View {
         let vx = Double(dragVel.width) * Self.radPerPoint
         let vy = Double(dragVel.height) * Self.radPerPoint
         if hypot(vx, vy) > 0.25 {
+          // no haptic on spin start （第五轮）: sliding the ball stays silent;
+          // pressTick now belongs only to the segment long-press.
           spin = SphereSpin(yaw0: yaw, pitch0: pitch, vx: min(max(vx, -9), 9), vy: min(max(vy, -9), 9), start: Date())
-          pressTick &+= 1
         }
       }
   }
@@ -357,6 +366,8 @@ struct MapView: View {
     let R = Double(min(size.width, size.height)) * 0.40 * Double(zoom)
     var best: (id: String, z: Double)? = nil
     for b in bubbles {
+      // identity focus （第五轮）: hidden bubbles are not tappable either
+      if let f = focus, case .identity(let fid) = f, !b.account.identityIds.contains(fid) { continue }
       let p = SphereMath.project(b.dir, yaw: ang.yaw, pitch: clampPitch(ang.pitch), radius: R)
       guard p.z > -0.05 else { continue }   // back side can't be tapped
       let t = (p.z + 1) / 2
