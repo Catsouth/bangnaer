@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 struct IdentityForm: View {
   @Environment(Store.self) var store
@@ -15,6 +16,7 @@ struct IdentityForm: View {
   @State private var provider: String
   @State private var via: String
   @State private var colorTouched = false   // the user picked a skin here: stop following the type / provider
+  @State private var clipValues: [String] = []   // clipboard candidates for the value field （第二轮细化）
 
   init(existing: Identity?, type: String, defaultColor: String) {
     self.existing = existing
@@ -106,6 +108,7 @@ struct IdentityForm: View {
           }
         }
         Section {
+          if !clipValues.isEmpty { clipRow }
           TextField(placeholder, text: $value)
             .keyboardType(type == "email" || (isLogin && (provider == "apple" || provider == "google")) ? .emailAddress : type == "phone" ? .phonePad : .asciiCapable)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -157,8 +160,12 @@ struct IdentityForm: View {
         ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) { Button(existing == nil ? "添加" : "保存") { save() }.bold().disabled(!valid) }
       }
-      .onAppear { if !via.isEmpty && !bindable.contains(where: { $0.id == via }) { via = "" } }
+      .onAppear {
+        if !via.isEmpty && !bindable.contains(where: { $0.id == via }) { via = "" }
+        refreshClip()
+      }
       .onChange(of: type) { old, new in
+        refreshClip()
         if colorTouched { return }
         withAnimation(Motion.snappy) {
           if new == "login" && !isLoginSkin(color) { color = loginDefaultColor(provider) }
@@ -168,6 +175,7 @@ struct IdentityForm: View {
         }
       }
       .onChange(of: provider) { _, new in
+        refreshClip()
         if !colorTouched && isLoginSkin(color) { withAnimation(Motion.snappy) { color = loginDefaultColor(new) } }
       }
     }
@@ -186,6 +194,47 @@ struct IdentityForm: View {
       default: return "微信号"
       }
     }
+  }
+
+  /// Clipboard candidates above the value field （第二轮细化）: opening this form
+  /// from a legend long-press (or any 新身份 entry) offers the emails / phone
+  /// numbers SmartImport's recogniser finds on the clipboard — one tap fills
+  /// the value. Filtered to the form's kind: email forms list emails, phone
+  /// forms list numbers, login forms list emails only for the email-shaped
+  /// providers (Apple / Google); WeChat / QQ / 自定义 get none. Values that
+  /// already exist as an identity of this kind are not offered again, and an
+  /// empty scan hides the row entirely.
+  var clipRow: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("自动识别 · 来自剪贴板").font(.system(size: 12)).foregroundStyle(.secondary)
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+          ForEach(clipValues, id: \.self) { v in
+            Button { value = v } label: {
+              Text(v).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.glass, in: Capsule())
+            }
+            .buttonStyle(.plain)
+          }
+        }
+      }
+    }
+    .padding(.vertical, 2)
+  }
+
+  func refreshClip() {
+    guard existing == nil else { clipValues = []; return }
+    guard let s = UIPasteboard.general.string, !s.isEmpty else { clipValues = []; return }
+    let found = recognizedContacts(in: s)
+    let pool: [String]
+    switch type {
+    case "email": pool = found.emails
+    case "phone": pool = found.phones
+    default: pool = (provider == "apple" || provider == "google") ? found.emails : []
+    }
+    let have = Set(store.data.identities.filter { $0.type == type }.map { $0.value.lowercased() })
+    clipValues = pool.filter { !have.contains($0.lowercased()) }
   }
 
   func providerPill(_ p: String, _ name: String) -> some View {

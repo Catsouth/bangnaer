@@ -191,8 +191,8 @@ struct RootView: View {
       .onEnded { v in selectBar(at: v.location.x) }
   }
   func selectBar(at x: CGFloat) {
-    // capsule geometry: 4pt padding, then 62pt cells with 2pt gaps (64pt step)
-    let t = min(3, max(0, Int((x - 4) / 64)))
+    // capsule geometry: 4pt padding, then 64pt cells with 2pt gaps (66pt step)
+    let t = min(3, max(0, Int((x - 4) / 66)))
     if t != tab { go(t) }
   }
 
@@ -211,18 +211,22 @@ struct RootView: View {
     .shadow(color: .black.opacity(0.20), radius: 16, x: 0, y: 7)
   }
 
+  // Tabs follow the reference layout （第二轮细化）: big icon over the label, and
+  // the selected tab is a dark solid pill — near-black in both colour schemes,
+  // so it reads as a filled thumb against the glass — with its icon and label
+  // tinted the app accent. Unselected tabs keep the adaptive primary colour.
   func barTab(_ t: Int, _ name: String, _ icon: String) -> some View {
     let on = tab == t
-    return VStack(spacing: 2) {
-      Image(systemName: icon).font(.system(size: 19, weight: .semibold))
-      Text(name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
+    return VStack(spacing: 3) {
+      Image(systemName: icon).font(.system(size: 27, weight: .semibold))
+      Text(name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
     }
-    .foregroundStyle(on ? Color.primary : Color.secondary)
-    .frame(width: 62, height: 46)
+    .foregroundStyle(on ? Color.accentColor : Color.primary)
+    .frame(width: 64, height: 58)
     .background {
       if on {
-        Capsule().fill(Color.primary.opacity(0.10))
-          .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.6))
+        Capsule().fill(Color(white: 0.10))
+          .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 0.6))
           .matchedGeometryEffect(id: "barThumb", in: barNS)
       }
     }
@@ -233,8 +237,8 @@ struct RootView: View {
 
   func barCircle(_ icon: String, label: String, _ fn: @escaping () -> Void) -> some View {
     Button(action: fn) {
-      Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(.primary)
-        .frame(width: 52, height: 52)
+      Image(systemName: icon).font(.system(size: 23, weight: .semibold)).foregroundStyle(.primary)
+        .frame(width: 60, height: 60)
         .background { glassCircle }
         .contentShape(Circle())
     }

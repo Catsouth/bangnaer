@@ -390,6 +390,57 @@ icon-1024.png 只保留在本地工作区，推送清单排除（见下节）；
      全程只有一个呈现路径。拖动侧配套加了起始位移补偿（dragOrigin）：等长按
      落判的那段位移不计入旋转，球不会在起转瞬间跳一下。
 
+### 第二轮细化（已实现，2026-11-23，构建号 1025 真机验收反馈，共六条，本地提交未推送）
+
+1. **关系图图例改分段控件 + 第三组改名**（SphereMap.swift / WalletView.swift）
+   - 图例从三个独立 chip 改为卡包页 KindSwitch 同款分段控件：等宽三段
+     （图标+名称+计数横排）装进一个玻璃胶囊，选中段以组色 30% 填充 + 组色
+     描边，matchedGeometryEffect 滑动（segNS）。点按聚焦/再点取消仍走
+     SphereFocus.group，未改状态机制；提示文案保留在分段条下方。
+   - 第三组名称统一为「自定义」：球体图例 SphereGroup.custom 本就显示
+     「自定义」，本次把卡包页分段控件的「登录」段改名为「自定义」，两处
+     一致。前往登录、登录方式、IdentityForm 类型选择器里的「登录」等无关
+     文案未动。
+2. **长按菜单按组精简**（SphereMap.swift `addMenu(for:)`）
+   - 自定义段：添加邮箱/添加手机号/添加登录账号三项不变；Email 段只留
+     「添加邮箱」；SIM 段只留「添加手机号」；未绑定段（有未绑定服务时才
+     出现）保留三项。球面空白处长按的 confirmationDialog 三项不变。
+3. **添加表单带自动识别候选**（Forms.swift IdentityForm / SmartImport.swift）
+   - SmartImport 的自由文本识别抽出共用函数 `recognizedContacts(in:)`
+     （邮箱/手机号两条正则、+86 归一化、去重），parseFreeText 改为复用它，
+     识别口径单一来源。
+   - 新建身份时（编辑已有身份不出），IdentityForm 在值输入框上方加一行
+     「自动识别 · 来自剪贴板」候选 chip：onAppear 及类型/provider 变化时扫
+     剪贴板，按表单类型过滤（邮箱表单只列邮箱、手机号表单只列手机号；
+     登录表单仅 Apple/Google 这类邮箱形态 provider 列邮箱，微信/QQ/自定义
+     不出），已存在同类身份的值不再出现，点 chip 直接填入值输入框；剪贴板
+     无可识别内容时整行不出现。不读密码、不新造识别引擎。
+4. **卡包滑卡重影修复**（WalletView.swift deck）
+   - 根因：scrollTransition 里的 rotation3DEffect（perspective 0.6）会把卡面
+     投影到布局框**之外**（朝向观众的一边被透视放大、越出原框），deck 又开
+     了 scrollClipDisabled 没有任何裁剪，同时 opacity 随 phase 压到 0.65 使
+     两张卡都半透明——相邻卡的投影在屏幕上重叠、彼此透印，就是录屏里的
+     重影叠字。修法：过渡只保留 scale（1→0.94），去掉旋转与透明度；缩放不
+     出布局框、卡面保持不透明，两张卡在物理上不可能再叠印。AddCard 同步
+     改为只缩放。
+5. **捏合误弹菜单修复**（SphereMap.swift 手势仲裁）
+   - 机制：SwiftUI 手势数不到触点数，长按只盯它那根触点——双指落下时第一指
+     在第二指到位前静止满 0.45s、或捏合收尾手指变慢，都会让被盯的触点停在
+     12pt/0.45s 窗口内完成长按识别。修法：捏合每次 onChanged/onEnded 都打
+     时间戳 lastPinchAt；fireAddMenu 在 pinch 活跃中（pinchBase != nil）或
+     距最后一次捏合活动 0.35s 内直接不弹；若菜单已在落指阶段误弹，捏合一
+     开始（首次 onChanged）立即把它收掉。单指长按不受影响：捏合之后真正
+     开始的长按要 0.45s 后才完成识别，早已过 0.35s 守卫窗。
+6. **底栏照参考图改版**（AtlasApp.swift RootView）
+   - 四个页签图标放大到 27pt（原 19）、文字 11pt，格子 64×58（原 62×46），
+     胶囊随之增高；选中项改为深色实心药丸（white 0.10 近黑填充、双色模式
+     一致，与玻璃胶囊形成对比），图标+文字染 Color.accentColor；未选项改
+     为 .primary（原 .secondary，对照参考图未选为白色/主色）。滑动药丸的
+     matchedGeometry 与按住拖动切页保留，拖动步距按新几何改为 66pt；搜索
+     圆钮放大到 60 直径、图标 23pt。设置页作为 tab 时 Form 加 88pt 底部
+     contentMargins 防新栏遮尾（sheet 模式不加）。卡包/全部 App 原有 96pt
+     底部留白仍大于新栏总高（约 74pt），未动。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

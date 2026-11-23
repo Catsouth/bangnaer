@@ -113,10 +113,12 @@ struct MapView: View {
   @State private var focus: SphereFocus? = nil
   @GestureState private var pressHeld = false
   @State private var showAddMenu = false
+  @State private var lastPinchAt = Date.distantPast   // pinch arbitration （第二轮细化）
   @State private var tapTick = 0
   @State private var pressTick = 0
   @State private var lastLongPress = Date.distantPast
   @State private var iconTick = 0
+  @Namespace private var segNS
 
   static let pitchLimit = 1.25
   static let radPerPoint = 0.0055
@@ -157,7 +159,7 @@ struct MapView: View {
               .highPriorityGesture(longPressGesture)
               .onTapGesture { loc in tap(at: loc, in: geo.size) }
             legend.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-              .padding(.leading, 16).padding(.top, 10)
+              .padding(.horizontal, 16).padding(.top, 10)
               .allowsHitTesting(true)
           }
         }
@@ -315,10 +317,17 @@ struct MapView: View {
   var pinchGesture: some Gesture {
     MagnificationGesture()
       .onChanged { s in
+        // Pinch arbitration （第二轮细化）: stamp every pinch activity so the
+        // long-press can tell "a pinch is / was just happening" — and if a menu
+        // was misfired in the plant phase (first finger resting inside the
+        // long-press window before the second finger landed), the pinch that
+        // follows immediately takes over and dismisses it.
+        lastPinchAt = Date()
+        if showAddMenu { showAddMenu = false }
         if pinchBase == nil { commitSpin(); pinchBase = zoom }
         zoom = min(2.4, max(0.55, (pinchBase ?? 1) * s))
       }
-      .onEnded { _ in pinchBase = nil }
+      .onEnded { _ in pinchBase = nil; lastPinchAt = Date() }
   }
 
   // High priority over the drag, and it fires the moment the press is recognised
@@ -331,6 +340,14 @@ struct MapView: View {
 
   func fireAddMenu() {
     guard !showAddMenu else { return }
+    // Pinch arbitration （第二轮细化）: SwiftUI gestures can't count touches, so
+    // the long-press recognises on its one tracked touch — planting two fingers
+    // (or winding a pinch down slowly) can leave that touch inside the 12pt /
+    // 0.45s window and complete the press mid-pinch. Suppress the menu while a
+    // pinch is active, and for a beat after the last pinch activity; a press
+    // that genuinely starts after a pinch still completes ≥0.45s later, past
+    // the guard window, so single-finger long-press is unchanged.
+    guard pinchBase == nil, Date().timeIntervalSince(lastPinchAt) > 0.35 else { return }
     commitSpin()               // freeze the ball where it is before the menu covers it
     dragBase = nil
     dragLast = nil
@@ -378,41 +395,74 @@ struct MapView: View {
 
   // MARK: legend
 
-  var legend: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 8) {
-        ForEach(SphereGroup.allCases.filter { $0 != .none || (groupCounts[.none] ?? 0) > 0 }, id: \.rawValue) { g in
-          chip(g)
-        }
-      }
-      Text("拖动旋转 · 捏合缩放 · 长按添加身份").font(.system(size: 11)).foregroundStyle(.secondary)
+  var visibleGroups: [SphereGroup] {
+    SphereGroup.allCases.filter { $0 != .none || (groupCounts[.none] ?? 0) > 0 }
+  }
+  func groupIcon(_ g: SphereGroup) -> String {
+    switch g {
+    case .email: return "envelope"
+    case .sim: return "simcard"
+    case .custom: return "person.badge.key"
+    case .none: return "circle.dashed"
     }
   }
 
-  /// A chip is a focus toggle (patch batch): tap it and the sphere keeps only that
-  /// group lit (same 0.22 dimming as the identity focus); tap it again — or tap
-  /// empty sphere — to clear. Long-press keeps its add-identity context menu, now
-  /// served by the chip itself so it never races the sphere's gestures.
-  func chip(_ g: SphereGroup) -> some View {
+  /// The legend is the wallet page's segmented control now （第二轮细化）: equal-width
+  /// segments (icon + name + count) in one glass capsule, the focused group filled
+  /// with its group colour, the thumb sliding via matchedGeometryEffect.
+  var legend: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 0) {
+        ForEach(visibleGroups, id: \.rawValue) { g in segment(g) }
+      }
+      .padding(3)
+      .background(.glass, in: Capsule())
+      .animation(Motion.smooth, value: focus)
+      Text("拖动旋转 · 捏合缩放 · 长按添加身份").font(.system(size: 11)).foregroundStyle(.secondary)
+        .padding(.leading, 6)
+    }
+  }
+
+  /// A segment is still a focus toggle: tap it and the sphere keeps only that
+  /// group lit (the SphereFocus.group dimming); tap it again — or tap empty
+  /// sphere — to clear. Its long-press context menu is trimmed per group
+  /// （第二轮细化）: Email offers only 添加邮箱， SIM only 添加手机号， 自定义 (and
+  /// 未绑定） keep all three — the sphere's own blank-area long-press menu is
+  /// unchanged and also keeps all three.
+  func segment(_ g: SphereGroup) -> some View {
     let on = focus == .group(g)
     return Button {
       withAnimation(Motion.smooth) { focus = on ? nil : .group(g) }
       tapTick &+= 1
     } label: {
       HStack(spacing: 5) {
-        Circle().fill(g.color).frame(width: 9, height: 9)
-        Text(g.name).font(.system(size: 13, weight: .semibold))
-        Text("\(groupCounts[g] ?? 0)").font(.system(size: 13, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
+        Image(systemName: groupIcon(g)).font(.system(size: 13, weight: .semibold))
+        Text(g.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+        Text("\(groupCounts[g] ?? 0)").font(.system(size: 12, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
       }
-      .padding(.horizontal, 11).padding(.vertical, 7)
-      .background(on ? AnyShapeStyle(g.color.opacity(0.28)) : AnyShapeStyle(.glass), in: Capsule())
-      .overlay { if on { Capsule().strokeBorder(g.color.opacity(0.75), lineWidth: 0.8) } }
-      .contentShape(Capsule())
+      .frame(maxWidth: .infinity).frame(height: 34)
+      .foregroundStyle(on ? .primary : .secondary)
+      .background {
+        if on {
+          Capsule().fill(g.color.opacity(0.30))
+            .overlay(Capsule().strokeBorder(g.color.opacity(0.55), lineWidth: 0.7))
+            .matchedGeometryEffect(id: "segThumb", in: segNS)
+        }
+      }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .contextMenu {
+    .contextMenu { addMenu(for: g) }
+  }
+
+  @ViewBuilder func addMenu(for g: SphereGroup) -> some View {
+    if g == .email || g == .custom || g == .none {
       Button { store.route = .newIdentity("email") } label: { Label("添加邮箱", systemImage: "envelope") }
+    }
+    if g == .sim || g == .custom || g == .none {
       Button { store.route = .newIdentity("phone") } label: { Label("添加手机号", systemImage: "simcard") }
+    }
+    if g == .custom || g == .none {
       Button { store.route = .newIdentity("login") } label: { Label("添加登录账号", systemImage: "person.badge.key") }
     }
   }

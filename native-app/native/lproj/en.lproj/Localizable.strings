@@ -73,3 +73,7 @@
 "编辑" = "Edit";
 "删除" = "Delete";
 "设置" = "Settings";
+
+/* Round 2: sphere group name / form clipboard candidates */
+"未绑定" = "Unbound";
+"自动识别 · 来自剪贴板" = "Auto-recognized · From clipboard";

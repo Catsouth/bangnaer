@@ -219,14 +219,32 @@ private func regexFind(_ pattern: String, in text: String, caseInsensitive: Bool
   return re.matches(in: text, range: range).compactMap { m in Range(m.range, in: text).map { String(text[$0]) } }
 }
 
+/// Free-text contact recognition, shared by parseFreeText below and the identity
+/// form's clipboard candidates （第二轮细化）: the same two patterns, the same +86
+/// normalisation, de-duplicated, order of appearance kept. Never reads passwords —
+/// it only ever looks at the text it is handed.
+func recognizedContacts(in text: String) -> (emails: [String], phones: [String]) {
+  var emails: [String] = []
+  for e in regexFind("[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.(?:com|cn|net|org|io|ai|dev|so|tv|cc|co|me|info|xyz|top|vip|club|site|online|gov\\.cn|edu\\.cn|com\\.cn|net\\.cn|org\\.cn)", in: text, caseInsensitive: true) where !emails.contains(e) {
+    emails.append(e)
+  }
+  var phones: [String] = []
+  for p in regexFind("(?:\\+86)?1[3-9]\\d{9}", in: text) {
+    let n = p.hasPrefix("+86") ? String(p.dropFirst(3)) : p
+    if !phones.contains(n) { phones.append(n) }
+  }
+  return (emails, phones)
+}
+
 /// 网页版 parseText：邮箱/手机号先进身份候选；服务名与域名命中只算低置信线索。
 private func parseFreeText(_ text: String, base: AtlasData, candidates: inout [SmartCandidate], proposed: inout [ProposedIdentity]) -> Int {
   let before = candidates.count
-  for e in regexFind("[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)*\\.(?:com|cn|net|org|io|ai|dev|so|tv|cc|co|me|info|xyz|top|vip|club|site|online|gov\\.cn|edu\\.cn|com\\.cn|net\\.cn|org\\.cn)", in: text, caseInsensitive: true) {
+  let found = recognizedContacts(in: text)
+  for e in found.emails {
     resolveIdentity(username: e, sourceDomain: "", base: base, proposed: &proposed)
   }
-  for p in regexFind("(?:\\+86)?1[3-9]\\d{9}", in: text) {
-    resolveIdentity(username: p.hasPrefix("+86") ? String(p.dropFirst(3)) : p, sourceDomain: "", base: base, proposed: &proposed)
+  for p in found.phones {
+    resolveIdentity(username: p, sourceDomain: "", base: base, proposed: &proposed)
   }
   let lower = text.lowercased()
   for p in Presets.all where lower.contains(p.domain) || (p.name.count >= 2 && text.contains(p.name)) {

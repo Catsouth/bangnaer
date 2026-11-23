@@ -46,16 +46,22 @@ struct WalletView: View {
             .buttonStyle(PressStyle(scale: 0.97))
             .containerRelativeFrame(.horizontal)
             .scrollTransition(.interactive, axis: .horizontal) { c, phase in
-              c.rotation3DEffect(.degrees(phase.value * -18), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
-                .scaleEffect(1 - abs(phase.value) * 0.1)
-                .opacity(1 - abs(phase.value) * 0.35)
+              // No rotation / opacity here （第二轮细化）: rotation3DEffect with
+              // perspective projects the card face OUTSIDE its layout frame (the
+              // near edge is magnified past the frame), scrollClipDisabled means
+              // nothing clips that projection, and the opacity dip made both
+              // overlapping faces translucent — the neighbour's text printed
+              // through, offset: the ghosting seen on device. A scale-only
+              // transition never leaves the layout frame and the card face
+              // stays opaque, so two cards can never print through each other.
+              c.scaleEffect(1 - abs(phase.value) * 0.06)
             }
             .id(i.id)
         }
         AddCard(kind: store.kind)
           .containerRelativeFrame(.horizontal)
           .scrollTransition(.interactive, axis: .horizontal) { c, phase in
-            c.scaleEffect(1 - abs(phase.value) * 0.1).opacity(1 - abs(phase.value) * 0.35)
+            c.scaleEffect(1 - abs(phase.value) * 0.06)
           }
           .id("add")
       }
@@ -119,7 +125,7 @@ struct KindSwitch: View {
   @Namespace private var ns
   var body: some View {
     HStack(spacing: 0) {
-      ForEach([("email", "邮箱", "envelope"), ("phone", "手机号", "simcard"), ("login", "登录", "person.badge.key")], id: \.0) { t in
+      ForEach([("email", "邮箱", "envelope"), ("phone", "手机号", "simcard"), ("login", "自定义", "person.badge.key")], id: \.0) { t in
         let k = t.0, name = t.1, icon = t.2
         let on = store.kind == k
         Button {

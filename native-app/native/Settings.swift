@@ -101,6 +101,10 @@ struct SettingsSheet: View {
         }.listRowBackground(Color.clear)
       }
       .tint(.accentColor)
+      // as a tab, the floating bar (taller since 第二轮细化） overlays the form's
+      // tail — give the scroll content room to clear it; as a sheet there is no
+      // bar, so no margin then
+      .contentMargins(.bottom, embedded ? 88 : 0, for: .scrollContent)
       .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         if !embedded {
