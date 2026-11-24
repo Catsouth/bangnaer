@@ -13,9 +13,15 @@ import SpriteKit
 // recomposited every frame. The maths is unchanged: quaternion trackball
 // orientation + perspective projection are still computed in Swift
 // (SphereMath), and the scene owns the orientation state, so a drag or a
-// spin no longer re-renders any SwiftUI at all. A baked shading sprite over
-// the ball (limb darkening + a top-left highlight) plus friction-tuned
-// inertia, a tap pulse and a slow idle rotation give it physical-ball feel.
+// spin no longer re-renders any SwiftUI at all. Friction-tuned
+// inertia, a tap pulse and a slow idle rotation give it physical-ball feel
+// （第九轮's baked shading sprite — limb darkening + highlight — was
+// removed again in 第十轮 at the user's request: no dark shadow on the
+// ball, background transparent, bubbles alone define the sphere）。
+// 第十轮 keeps the stage and the maths but rebuilds the catering behind it —
+// disk-cached, batched, gesture-yielding bakes plus a launch warm-up (see
+// SphereBaker): the remaining device hitch was bakes and texture uploads
+// landing mid-gesture, not the engine.
 // Drag rotates (quaternion trackball
 // since 第六轮： no Euler angles, no pitch clamp, so the ball rolls 360° in every
 // direction), pinch zooms, back-side bubbles fade/shrink and can't
@@ -382,57 +388,293 @@ struct BubbleFace: View {
   }
 }
 
-/// Offscreen pre-rendering for the sphere （第八轮）. Bakes bubble faces
-/// and label bitmaps at spec time (computeBubbles) and caches them, so
-/// the per-frame canvas is reduced to one drawImage per bubble plus
-/// one per label. Icons that are still in flight when specs are
-/// computed are baked as letter tiles first; computeBubbles registers
-/// the IconStore load through ensureLoad, and when the icon lands the
-/// baker coalesces the burst into one revision bump, which the view
-/// turns into a spec refresh that re-bakes just the new faces (the
-/// caches make every already-baked face a dictionary hit).
+/// Offscreen pre-rendering for the sphere （第八轮）, production
+/// pipeline rebuilt in 第十轮. Bakes bubble faces and label bitmaps at
+/// spec time (computeBubbles) and caches them, so the per-frame stage
+/// work is reduced to node transforms over ready textures. Icons that
+/// are still in flight when specs are computed are baked as letter
+/// tiles first; computeBubbles registers the IconStore load through
+/// ensureLoad, and when the icon lands the baker coalesces the burst
+/// into one revision bump, which the view turns into a spec refresh
+/// that re-bakes just the new faces (the caches make every
+/// already-baked face a hit).
+///
+/// 第十轮 — why the pipeline changed: the baker was @MainActor and
+/// baked synchronously inside computeBubbles, so an icon landing
+/// mid-drag triggered refreshBubbles → a burst of ImageRenderer work
+/// plus fresh SKTexture uploads on the main thread, in the middle of
+/// the user's gesture (device video: letter tiles morphing into icons
+/// while sliding, spin speed stuttering). The SpriteKit stage itself
+/// was never the bottleneck — the catering was. Now:
+/// - bakes are also persisted to Caches/sphere-bake as PNGs, keyed by
+///   an FNV-1a hash of the full input key, so a cold launch reads
+///   files instead of re-rendering (decode restores the bake scale:
+///   faces 2×, labels 3× — SKTexture label sizing reads points);
+/// - a cache miss no longer bakes inline: it enqueues a job and the
+///   letter tile stands in. Jobs run in batches of ≤6 with a runloop
+///   yield between batches, and the whole queue pauses while the
+///   scene reports a live drag / pinch / spin (setBusy), as do spec
+///   refreshes on the view side — nothing competes with a gesture;
+/// - completions bump the same coalesced revision as icon loads, and
+///   prewarm() runs a full spec pass the moment store data lands, so
+///   the sphere tab is usually all cache hits on first open.
 @MainActor final class SphereBaker: ObservableObject {
   static let shared = SphereBaker()
   @Published private(set) var revision = 0
+  /// Bumped when the scene reports the ball has gone idle after being
+  /// busy: the view flushes the spec refresh it deferred meanwhile.
+  @Published private(set) var settledTick = 0
+
   private var bubbleCache: [String: UIImage] = [:]
   private var labelCache: [String: UIImage] = [:]
   private var loadRegistered = Set<String>()
-  private var bumpScheduled = false
 
-  /// The baked face for one bubble spec. The cache key carries every
-  /// input the bake reads (account, icon key + presence, name/domain
-  /// for the brand colour, group for the rim), so an edit that changes
-  /// any of them bakes fresh instead of serving the stale face. The
-  /// cache is never evicted: one small bitmap per account state, and
-  /// account edits are rare.
+  private static let faceScale: CGFloat = 2    // BubbleFace bake scale (renderer + disk decode)
+  private static let labelScale: CGFloat = 3   // label bake scale (renderer + disk decode)
+  private static let batchSize = 6
+
+  // MARK: disk cache (Caches/sphere-bake)
+
+  private let diskDir: URL = {
+    let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("sphere-bake", isDirectory: true)
+    try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+    return u
+  }()
+  private let io = DispatchQueue(label: "atlas.spherebake", qos: .utility)
+  private var pruneStarted = false
+
+  init() { pruneDiskIfNeeded() }
+
+  /// FNV-1a over the key string: String.hashValue is per-process
+  /// randomised, so it can never name a file that must survive a
+  /// relaunch — this hash can, and collisions just cost a re-bake.
+  private static func fnv(_ s: String) -> String {
+    var h: UInt64 = 0xcbf29ce484222325
+    for b in s.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+    return String(h, radix: 16)
+  }
+
+  private func diskImage(fileKey: String, scale: CGFloat) -> UIImage? {
+    guard let data = try? Data(contentsOf: diskDir.appendingPathComponent(fileKey + ".png"))
+    else { return nil }
+    // PNG data carries pixels only; the bake scale must be restored or
+    // a label texture reports 3× the points and draws 3× too large.
+    return UIImage(data: data, scale: scale)
+  }
+
+  private func writeDisk(_ img: UIImage, fileKey: String) {
+    let url = diskDir.appendingPathComponent(fileKey + ".png")
+    io.async { if let d = img.pngData() { try? d.write(to: url, options: .atomic) } }
+  }
+
+  /// Once per launch, off the main thread: if the bake directory has
+  /// grown past ~80 MB, delete oldest-first until it fits. Normal use
+  /// sits far below this (one ~160px PNG per account state); the cap
+  /// only guards against years of renamed accounts piling up.
+  private func pruneDiskIfNeeded() {
+    guard !pruneStarted else { return }
+    pruneStarted = true
+    let dir = diskDir
+    io.async {
+      let fm = FileManager.default
+      guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
+      else { return }
+      var total = 0
+      var sized: [(url: URL, size: Int, date: Date)] = []
+      for u in items {
+        let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let s = v?.fileSize ?? 0
+        total += s
+        sized.append((u, s, v?.contentModificationDate ?? .distantPast))
+      }
+      let limit = 80 * 1024 * 1024
+      guard total > limit else { return }
+      for item in sized.sorted(by: { $0.date < $1.date }) {
+        if total <= limit { break }
+        try? fm.removeItem(at: item.url)
+        total -= item.size
+      }
+    }
+  }
+
+  // MARK: bake queue (batched, gesture-yielding)
+
+  private struct Job {
+    let key: String
+    let produce: () -> UIImage?
+    let apply: (UIImage?) -> Void
+  }
+  private var queue: [Job] = []
+  private var queuedKeys = Set<String>()
+  private var pumpScheduled = false
+  private var retryScheduled = false
+  private var busy = false
+
+  /// Live re-check of the scene's interaction state, wired by the
+  /// sphere host at scene creation. The pushed busy flag (setBusy)
+  /// can go stale if the scene stops being presented mid-spin — no
+  /// update loop runs to report the settle — so the pump reconciles
+  /// against this provider, whose spin term is wall-clock based and
+  /// decays on its own.
+  var busyProvider: (() -> Bool)?
+  private var isBusyNow: Bool {
+    if let busyProvider { return busyProvider() }
+    return busy
+  }
+
+  private func enqueue(key: String, produce: @escaping () -> UIImage?,
+                       apply: @escaping (UIImage?) -> Void) {
+    guard queuedKeys.insert(key).inserted else { return }
+    queue.append(Job(key: key, produce: produce, apply: apply))
+    schedulePump()
+  }
+
+  private func schedulePump() {
+    guard !pumpScheduled else { return }
+    pumpScheduled = true
+    Task { @MainActor in
+      self.pumpScheduled = false
+      self.pumpBatch()
+    }
+  }
+
+  /// One batch per runloop turn: ≤6 ImageRenderer bakes, then the rest
+  /// of the queue waits for a later turn — a 150-face cold start warms
+  /// up over a second or two of idle slices instead of one long hitch.
+  private func pumpBatch() {
+    guard !isBusyNow else { scheduleRetry(); return }
+    var n = 0
+    while n < Self.batchSize, !queue.isEmpty {
+      let job = queue.removeFirst()
+      let img = job.produce()
+      queuedKeys.remove(job.key)
+      job.apply(img)
+      n += 1
+    }
+    if !queue.isEmpty { schedulePump() }
+  }
+
+  private func scheduleRetry() {
+    guard !retryScheduled else { return }
+    retryScheduled = true
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(200))
+      self.retryScheduled = false
+      // the pushed flag went stale (scene unpresented mid-spin): fire
+      // the settle the view's deferred refresh is waiting on
+      if self.busy && !self.isBusyNow { self.setBusy(false) }
+      if !self.queue.isEmpty { self.schedulePump() }
+    }
+  }
+
+  /// The scene's interaction report （第十轮）: while the ball is being
+  /// dragged / pinched / spun, baking pauses outright. When it settles,
+  /// the queue resumes and settledTick tells the view to flush the
+  /// spec refresh it deferred during the gesture.
+  func setBusy(_ b: Bool) {
+    guard b != busy else { return }
+    busy = b
+    if !b {
+      settledTick &+= 1
+      schedulePump()
+    }
+  }
+
+  // MARK: faces & labels
+
+  /// The baked face for one bubble spec. Lookup order: memory → disk →
+  /// queue. The cache key carries every input the bake reads (account,
+  /// icon key + presence, name/domain for the brand colour, group for
+  /// the rim), so an edit that changes any of them bakes fresh instead
+  /// of serving the stale face — and because the disk file is named by
+  /// a hash of that same key, any input change also misses on disk and
+  /// re-bakes. Until a queued face lands, the letter tile stands in.
   func bubbleImage(account: Account, iconKey: String, entry: IconEntry?,
                    brand: Color, letter: String, group: SphereGroup) -> UIImage {
     let ck = [account.id, iconKey, entry != nil ? "i" : "t", account.name, account.domain,
               String(group.rawValue), letter].joined(separator: "|")
     if let img = bubbleCache[ck] { return img }
-    let renderer = ImageRenderer(content: BubbleFace(entry: entry, brand: brand, letter: letter, rim: group.color))
-    renderer.scale = 2
+    let fk = "f-" + Self.fnv(ck)
+    if let img = diskImage(fileKey: fk, scale: Self.faceScale) {
+      bubbleCache[ck] = img
+      return img
+    }
+    // No icon yet: the letter tile IS the face until the icon lands
+    // (its arrival changes this key through the presence flag above).
+    guard let entry else {
+      return letterTile(name: account.name, domain: account.domain,
+                        brand: brand, letter: letter, group: group)
+    }
+    enqueue(key: ck) {
+      let renderer = ImageRenderer(content: BubbleFace(entry: entry, brand: brand, letter: letter, rim: group.color))
+      renderer.scale = Self.faceScale
+      return renderer.uiImage
+    } apply: { [weak self] img in
+      guard let self, let img else { return }
+      self.bubbleCache[ck] = img
+      self.writeDisk(img, fileKey: fk)
+      self.noteReady()
+    }
+    return letterTile(name: account.name, domain: account.domain,
+                      brand: brand, letter: letter, group: group)
+  }
+
+  /// The letter-tile face: placeholder while a real face waits in the
+  /// queue, and the final face for icon-less bubbles. Keyed by
+  /// everything that determines it (the brand colour derives from
+  /// name+domain), memory- and disk-cached like real faces. Baked
+  /// synchronously on a total miss — distinct tiles are few (an
+  /// initial × a brand × a group), and spec refreshes never run
+  /// mid-gesture anymore, so the burst the queue exists to prevent
+  /// cannot come from here.
+  private func letterTile(name: String, domain: String, brand: Color,
+                          letter: String, group: SphereGroup) -> UIImage {
+    let ck = ["tile", name, domain, letter, String(group.rawValue)].joined(separator: "|")
+    if let img = bubbleCache[ck] { return img }
+    let fk = "t-" + Self.fnv(ck)
+    if let img = diskImage(fileKey: fk, scale: Self.faceScale) {
+      bubbleCache[ck] = img
+      return img
+    }
+    let renderer = ImageRenderer(content: BubbleFace(entry: nil, brand: brand, letter: letter, rim: group.color))
+    renderer.scale = Self.faceScale
     let img = renderer.uiImage ?? UIImage()
     bubbleCache[ck] = img
+    writeDisk(img, fileKey: fk)
     return img
   }
 
   /// displayLabel typeset once, as a transparent bitmap (black text for
-  /// light mode, white for dark — the canvas's .primary at 9pt). Nil
-  /// for an empty label or a failed render; the canvas then draws
-  /// nothing, as it effectively did for an empty Text.
+  /// light mode, white for dark — the canvas's .primary at 9pt). Same
+  /// lookup order as faces; a queued label reads as nil for now (the
+  /// bubble simply has no label this refresh) and the completion's
+  /// revision bump re-reads it as a hit. Nil for an empty label too.
   func labelImage(_ text: String, scheme: ColorScheme) -> UIImage? {
     guard !text.isEmpty else { return nil }
     let ck = (scheme == .dark ? "d|" : "l|") + text
     if let img = labelCache[ck] { return img }
-    let renderer = ImageRenderer(content:
-      Text(text).font(.system(size: 9, weight: .medium))
-        .foregroundStyle(scheme == .dark ? Color.white : Color.black))
-    renderer.scale = 3
-    let img = renderer.uiImage
-    if let img { labelCache[ck] = img }
-    return img
+    let fk = "l-" + Self.fnv(ck)
+    if let img = diskImage(fileKey: fk, scale: Self.labelScale) {
+      labelCache[ck] = img
+      return img
+    }
+    enqueue(key: ck) {
+      let renderer = ImageRenderer(content:
+        Text(text).font(.system(size: 9, weight: .medium))
+          .foregroundStyle(scheme == .dark ? Color.white : Color.black))
+      renderer.scale = Self.labelScale
+      return renderer.uiImage
+    } apply: { [weak self] img in
+      guard let self, let img else { return }
+      self.labelCache[ck] = img
+      self.writeDisk(img, fileKey: fk)
+      self.noteReady()
+    }
+    return nil
   }
+
+  // MARK: icon-load plumbing & warm-up
 
   /// Register an IconStore load for a key whose icon was missing at
   /// spec time (once per key — IconStore itself coalesces waiters, this
@@ -448,28 +690,54 @@ struct BubbleFace: View {
 
   private func loadFinished(_ key: String) {
     loadRegistered.remove(key)
-    noteIconReady()
+    noteReady(reprewarm: true)
   }
 
-  private func noteIconReady() {
-    guard !bumpScheduled else { return }
-    bumpScheduled = true
+  /// One coalesced "something landed" signal for both icon loads and
+  /// bake completions: bursts collapse into a single revision bump per
+  /// ~150 ms window. An icon landing also re-runs the warm-up pass, so
+  /// the real faces get queued even if the sphere tab was never opened.
+  private var readyScheduled = false
+  private var reprewarmPending = false
+  private func noteReady(reprewarm: Bool = false) {
+    if reprewarm { reprewarmPending = true }
+    guard !readyScheduled else { return }
+    readyScheduled = true
     Task { @MainActor in
-      // icons land in bursts (prefetch); one refresh per burst is enough
       try? await Task.sleep(for: .milliseconds(150))
-      self.bumpScheduled = false
+      self.readyScheduled = false
       self.revision &+= 1
+      if self.reprewarmPending {
+        self.reprewarmPending = false
+        if let idx = self.prewarmIndex { _ = MapView.computeBubbles(idx) }
+      }
     }
+  }
+
+  /// Warm-up （第十轮）: called the moment store data lands (launch /
+  /// sync adopt), right after the icon prefetch starts. A full spec
+  /// pass resolves every bubble against the caches — hits are free,
+  /// misses enqueue queue jobs and register icon loads — so by the
+  /// time the user opens the sphere tab the faces are baked (or
+  /// already on disk from last launch) instead of being made to order
+  /// under their first drag.
+  private var prewarmIndex: AtlasIndex?
+  func prewarm(_ index: AtlasIndex) {
+    prewarmIndex = index
+    _ = MapView.computeBubbles(index)
   }
 }
 
 // MARK: - SpriteKit sphere stage （第九轮）
 
 /// The GPU stage for the sphere. One SKSpriteNode per bubble (texture =
-/// the SphereBaker face bitmap) plus one per label, a pooled set of
-/// SKShapeNodes for the identity-focus threads, a faint body disc and a
-/// baked shading sprite on top (limb darkening + top-left highlight —
-/// the "real ball" read). The scene owns the orientation state (committed
+/// the SphereBaker face bitmap) plus one per label, and a pooled set of
+/// SKShapeNodes for the identity-focus threads. （第九轮 had a faint
+/// body disc and a baked shading sprite on top — limb darkening +
+/// top-left highlight for the "real ball" read; 第十轮 removed both at
+/// the user's request: no grey bed, no darkened limb, the background
+/// stays transparent and the bubbles alone define the ball。）The scene
+/// owns the orientation state (committed
 /// quaternion, friction spin, idle rotation), so gestures write straight
 /// into it and a frame of rotation touches no SwiftUI state at all;
 /// SwiftUI only pushes (specs, focus, scheme) through configure() when
@@ -490,6 +758,23 @@ final class SphereScene: SKScene {
   private var spin: SphereSpin? = nil
   private(set) var currentZoom: CGFloat = 1
   private var dragging = false
+  private var pinching = false
+  // Interaction reporting for the bake pipeline （第十轮）: the baker
+  // pauses its queue and the view defers spec refreshes while this is
+  // true, so no ImageRenderer work or texture upload ever lands in
+  // the middle of a gesture. Idle display rotation is NOT interaction
+  // — baking proceeds underneath it.
+  var onBusyChange: ((Bool) -> Void)? = nil
+  private var lastBusy = false
+  var isInteracting: Bool {
+    dragging || pinching || (spin.map { $0.speed(at: Date()) >= 0.05 } ?? false)
+  }
+  private func reportBusy() {
+    let b = isInteracting
+    guard b != lastBusy else { return }
+    lastBusy = b
+    onBusyChange?(b)
+  }
   // frame bookkeeping
   private var lastTime: TimeInterval = 0
   private var lastInteraction: TimeInterval = 0
@@ -500,18 +785,14 @@ final class SphereScene: SKScene {
   private var faceImage: [String: UIImage] = [:]
   private var labelImage: [String: UIImage?] = [:]
   private var threadNodes: [SKShapeNode] = []
-  private let discNode = SKShapeNode()
-  private let shadeNode = SKSpriteNode()
-  private var lastDiscR: CGFloat = -1
 
   override init(size: CGSize) {
     super.init(size: size)
     backgroundColor = .clear
-    discNode.zPosition = -10
-    addChild(discNode)
-    shadeNode.texture = Self.makeShadingTexture()
-    shadeNode.zPosition = 10
-    addChild(shadeNode)
+    // No body disc and no shading overlay （第十轮， 用户 2026-11-24
+    // 追加）: the 第九轮 limb-darkening disc and grey ball bed are
+    // gone — the sphere's background is fully transparent and the
+    // bubbles alone define the ball.
   }
   required init?(coder aDecoder: NSCoder) { fatalError("SphereScene is created in code only") }
 
@@ -523,13 +804,12 @@ final class SphereScene: SKScene {
     self.focus = focus
     self.threadID = threadID
     self.threadColor = threadColor
-    if scheme != self.scheme || specs.count != self.specs.count {
-      discNode.fillColor = UIColor.label.withAlphaComponent(0.04)
-      discNode.strokeColor = UIColor.label.withAlphaComponent(0.07)
-      discNode.lineWidth = 1
-    }
     self.scheme = scheme
     self.specs = specs
+    // Textures created or swapped by this reconcile are collected and
+    // bulk-preloaded below （第十轮）: the GPU gets the whole set in
+    // one go instead of uploading each on its first drawn frame.
+    var freshTextures: [SKTexture] = []
     // reconcile the node pool with the spec set
     let ids = Set(specs.map { $0.account.id })
     for id in Array(faceNodes.keys) where !ids.contains(id) {
@@ -541,7 +821,9 @@ final class SphereScene: SKScene {
     for b in specs {
       let id = b.account.id
       if faceNodes[id] == nil {
-        let face = SKSpriteNode(texture: SKTexture(image: b.baked))
+        let tex = SKTexture(image: b.baked)
+        freshTextures.append(tex)
+        let face = SKSpriteNode(texture: tex)
         let label = SKSpriteNode()
         label.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         addChild(face)
@@ -550,7 +832,9 @@ final class SphereScene: SKScene {
         labelNodes[id] = label
         faceImage[id] = b.baked
       } else if faceImage[id] !== b.baked {
-        faceNodes[id]?.texture = SKTexture(image: b.baked)
+        let tex = SKTexture(image: b.baked)
+        freshTextures.append(tex)
+        faceNodes[id]?.texture = tex
         faceImage[id] = b.baked
       }
       let want: UIImage? = scheme == .dark ? b.labelDark : b.labelLight
@@ -558,6 +842,7 @@ final class SphereScene: SKScene {
       if stored !== want, let label = labelNodes[id] {
         if let want {
           let tex = SKTexture(image: want)
+          freshTextures.append(tex)
           label.texture = tex
           label.size = tex.size()
         } else {
@@ -565,6 +850,9 @@ final class SphereScene: SKScene {
         }
         labelImage[id] = want
       }
+    }
+    if !freshTextures.isEmpty {
+      SKTexture.preloadTextures(freshTextures) {}
     }
   }
 
@@ -574,6 +862,7 @@ final class SphereScene: SKScene {
     commitSpin()
     dragging = true
     lastInteraction = lastTime
+    reportBusy()
   }
   /// UIKit-space drag deltas, exactly the convention the Canvas code used:
   /// the axis is (dy, dx) because the projection works in y-up space.
@@ -593,8 +882,10 @@ final class SphereScene: SKScene {
     if omega > 0.25 {
       spin = SphereSpin(q0: q, axis: Vec3(x: wx / omega, y: wy / omega, z: 0), omega: omega, start: Date())
     }
+    reportBusy()
   }
-  func beginPinch() { commitSpin(); lastInteraction = lastTime }
+  func beginPinch() { commitSpin(); pinching = true; lastInteraction = lastTime; reportBusy() }
+  func endPinch() { pinching = false; lastInteraction = lastTime; reportBusy() }
   func setZoom(_ z: CGFloat) { currentZoom = z; lastInteraction = lastTime }
   func noteInteraction() { lastInteraction = lastTime }
   /// Tap feedback: the hit bubble pulses once (evaluated in layout, so
@@ -605,6 +896,7 @@ final class SphereScene: SKScene {
     guard let s = spin else { return }
     q = s.orientation(at: Date())
     spin = nil
+    reportBusy()
   }
 
   // MARK: per-frame layout
@@ -627,16 +919,13 @@ final class SphereScene: SKScene {
       let dq = Quat.axisAngle(Vec3(x: 0.30, y: 1, z: 0), 0.06 * dt)
       q = dq.times(q).normalized()
     }
+    reportBusy()   // a spin expiring here is the settle the baker waits for
     layout(now: currentTime)
   }
 
   private func layout(now: TimeInterval) {
     let size = self.size
-    guard size.width > 1, size.height > 1, !specs.isEmpty else {
-      discNode.isHidden = true
-      shadeNode.isHidden = true
-      return
-    }
+    guard size.width > 1, size.height > 1, !specs.isEmpty else { return }
     // Scene space is y-up; the SwiftUI layout centre (w/2, h/2 − 24 in
     // top-left space) is (w/2, h/2 + 24) here, and a projected point's
     // y flips sign at plot time — all rotation maths stays untouched.
@@ -677,17 +966,6 @@ final class SphereScene: SKScene {
       labelIDs.insert(p.b.account.id)
       budget -= 1
     }
-    // body disc + shading follow the ball's current radius
-    let discR = CGFloat(R) * 1.05
-    discNode.isHidden = false
-    shadeNode.isHidden = false
-    if abs(discR - lastDiscR) > 0.5 {
-      lastDiscR = discR
-      discNode.path = CGPath(ellipseIn: CGRect(x: -discR, y: -discR, width: discR * 2, height: discR * 2), transform: nil)
-      shadeNode.size = CGSize(width: discR * 2, height: discR * 2)
-    }
-    discNode.position = center
-    shadeNode.position = center
     // focus threads （第三轮细化）: centre → each bound bubble, in the
     // identity's colour, depth-faded like the bubbles, under them.
     let threaded = threadID.map { tid in ps.filter { !$0.hidden && $0.b.account.identityIds.contains(tid) } } ?? []
@@ -739,37 +1017,6 @@ final class SphereScene: SKScene {
     }
   }
 
-  /// The ball's shading, baked once at 512px and scaled to the disc:
-  /// limb darkening (edges sink to 26% black) for the spherical read,
-  /// plus a soft white highlight toward the top-left. Alpha-blended over
-  /// the bubbles; the corners stay transparent, so only the disc shades.
-  private static func makeShadingTexture() -> SKTexture {
-    let side: CGFloat = 512
-    let fmt = UIGraphicsImageRendererFormat()
-    fmt.scale = 1
-    fmt.opaque = false
-    let img = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { ctx in
-      let cg = ctx.cgContext
-      let space = CGColorSpaceCreateDeviceRGB()
-      let center = CGPoint(x: side / 2, y: side / 2)
-      let limb = [UIColor.black.withAlphaComponent(0).cgColor,
-                  UIColor.black.withAlphaComponent(0).cgColor,
-                  UIColor.black.withAlphaComponent(0.26).cgColor] as CFArray
-      if let g = CGGradient(colorsSpace: space, colors: limb, locations: [0, 0.68, 1]) {
-        cg.drawRadialGradient(g, startCenter: center, startRadius: 0,
-                              endCenter: center, endRadius: side / 2, options: [])
-      }
-      // image space is y-down: (0.36, 0.30) of the side is the upper-left
-      let hc = CGPoint(x: side * 0.36, y: side * 0.30)
-      let glow = [UIColor.white.withAlphaComponent(0.20).cgColor,
-                  UIColor.white.withAlphaComponent(0).cgColor] as CFArray
-      if let g = CGGradient(colorsSpace: space, colors: glow, locations: [0, 1]) {
-        cg.drawRadialGradient(g, startCenter: hc, startRadius: 0,
-                              endCenter: hc, endRadius: side * 0.42, options: [])
-      }
-    }
-    return SKTexture(image: img)
-  }
 }
 
 /// SwiftUI host for the sphere's SKView. A representable (not SpriteView)
@@ -790,6 +1037,15 @@ struct SphereSKView: UIViewRepresentable {
     v.backgroundColor = .clear
     v.preferredFramesPerSecond = 120   // ProMotion where the hardware has it; clamped elsewhere
     scene.scaleMode = .resizeFill
+    // The baker yields to live gestures （第十轮）: the scene reports
+    // its interaction transitions, the baker pauses / resumes its
+    // queue and ticks the view's deferred-refresh flush.
+    scene.onBusyChange = { busy in
+      Task { @MainActor in SphereBaker.shared.setBusy(busy) }
+    }
+    Task { @MainActor in
+      SphereBaker.shared.busyProvider = { [weak scene] in scene?.isInteracting ?? false }
+    }
     v.presentScene(scene)
     return v
   }
@@ -801,9 +1057,11 @@ struct SphereSKView: UIViewRepresentable {
 struct MapView: View {
   @Environment(Store.self) var store
   @Environment(\.colorScheme) private var colorScheme
-  // Pre-rendering （第八轮）: when icons that were missing at spec time
-  // land, the baker bumps its revision and the specs refresh (below),
-  // re-baking those bubbles with their real icons.
+  // Pre-rendering （第八轮；第十轮加避让）: when icons that were missing
+  // at spec time land — or queued bakes complete — the baker bumps its
+  // revision and the specs refresh (below). A refresh that would land
+  // mid-gesture defers instead (see scheduleRefresh): baking and
+  // texture uploads no longer fight the user's drag.
   @ObservedObject private var baker = SphereBaker.shared
   // The SpriteKit stage （第九轮）: orientation, spin, zoom and idle
   // rotation all live in the scene now, so SwiftUI keeps only the
@@ -821,6 +1079,9 @@ struct MapView: View {
   // the store's accounts/identities actually change (see the onChange hooks
   // in body); before the first refresh lands, reads fall back to computing.
   @State private var cachedBubbles: [SphereBubble]? = nil
+  // A spec refresh deferred because the ball was mid-gesture （第十轮）;
+  // flushed once when the baker reports the scene has settled.
+  @State private var pendingRefresh = false
   // interaction feedback / menus
   @State private var focus: SphereFocus? = nil
   @State private var groupSheet: SphereGroup? = nil
@@ -865,6 +1126,16 @@ struct MapView: View {
     }
   }
   func refreshBubbles() { cachedBubbles = Self.computeBubbles(store.index) }
+  /// Every spec-refresh trigger routes through here （第十轮）: while
+  /// the scene is being dragged / pinched / spun, refreshing would
+  /// enqueue bakes and swap textures under the gesture — the diagnosed
+  /// hitch — so the refresh parks in pendingRefresh and the settled
+  /// tick flushes it exactly once. Multiple triggers during one
+  /// gesture still cost one refresh.
+  func scheduleRefresh() {
+    if scene.isInteracting { pendingRefresh = true }
+    else { pendingRefresh = false; refreshBubbles() }
+  }
   var groupCounts: [SphereGroup: Int] {
     var out: [SphereGroup: Int] = [:]
     for b in bubbles { out[b.group, default: 0] += 1 }
@@ -904,7 +1175,7 @@ struct MapView: View {
       .sensoryFeedback(.selection, trigger: tapTick)
       .sensoryFeedback(.impact(weight: .light), trigger: pressTick)
     }
-    .onAppear { refreshBubbles() }
+    .onAppear { scheduleRefresh() }
     .onChange(of: store.demoFocus) { _, f in
       withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
@@ -913,12 +1184,19 @@ struct MapView: View {
     // Accounts + identities cover everything computeBubbles reads (account
     // order, bindings, identity types); an unrelated edit may refresh the
     // cache once extra — a rare spare rebuild, never a stale ball.
-    .onChange(of: store.data.accounts) { _, _ in refreshBubbles() }
-    .onChange(of: store.data.identities) { _, _ in refreshBubbles() }
+    // 第十轮： all of them route through scheduleRefresh, so an edit
+    // landing mid-gesture defers like everything else.
+    .onChange(of: store.data.accounts) { _, _ in scheduleRefresh() }
+    .onChange(of: store.data.identities) { _, _ in scheduleRefresh() }
     // Icons landing after spec time （第八轮）: the baker's coalesced
     // revision bump refreshes the specs so those bubbles re-bake with
-    // their real icons (faces already baked stay cache hits).
-    .onChange(of: baker.revision) { _, _ in refreshBubbles() }
+    // their real icons (faces already baked stay cache hits). Bake
+    // completions bump the same revision （第十轮）.
+    .onChange(of: baker.revision) { _, _ in scheduleRefresh() }
+    // The gesture settled （第十轮）: flush the one deferred refresh.
+    .onChange(of: baker.settledTick) { _, _ in
+      if pendingRefresh { pendingRefresh = false; refreshBubbles() }
+    }
     .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
       GroupIdentitiesSheet(group: g,
                            onPick: { i in
@@ -1003,6 +1281,7 @@ struct MapView: View {
       }
       .onEnded { _ in
         pinchBase = nil
+        scene.endPinch()
       }
   }
 

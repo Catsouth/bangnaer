@@ -807,6 +807,59 @@ Glass.regular.interactive()）;(3) SpriteKit 与 SwiftUI 的线程
 模型——configure 在 updateUIView（主线程）调用、update 也在主
 线程，池操作无跨线程。
 
+### 第十轮（2026-11-24，构建号 1036 真机验收反馈，本地提交未推送）
+
+真机反馈：换 SpriteKit 后滑动仍顿，且字母块在滑动途中边滑边变成真
+图标、转速忽快忽慢。复查代码确诊：引擎本身不是瓶颈，瓶颈是「备菜」
+与手势抢主线程——SphereBaker 是 @MainActor，computeBubbles 里对未
+命中内存缓存的气泡**同步**跑 ImageRenderer 现烘；图标异步陆续落地
+时 ensureLoad→loadFinished→revision→refreshBubbles 在用户滑动途中
+一批批补烘，并当场新建 SKTexture 上传 GPU。本轮只重建备菜管线，
+舞台与数学（第九轮全部行为：四元数、惯性、自转、聚焦、名称常显
+上限）一律不变。
+
+- 烘焙落盘缓存：产物（气泡脸、名字图明/暗、字母块）以 PNG 存
+  Caches/sphere-bake/。文件名 = 前缀（f-/l-/t-）+ 缓存键的 FNV-1a
+  哈希——缓存键即原内存键，含账号 id、图标 key+有无、name、domain、
+  分组、首字母/标签文本与明暗，任一输入变化键即变、自动失效重烘
+  （String.hashValue 每进程随机化，不能做文件名，故自实现 FNV-1a）。
+  命中直接读文件成图跳过 ImageRenderer；解码时按烘焙倍率还原
+  scale（脸 2×、标签 3×），否则 SKTexture 的 label 尺寸按点读会
+  放大 3 倍。目录总量 >80MB 时启动时按修改时间清旧（后台队列，
+  每启动一次）。
+- 烘焙限流 + 避让手势：未命中改为入队，字母块占位（无图标时字母
+  块本就是最终脸）。队列每批 ≤6 张、批间经 Task 调度让出 runloop；
+  场景忙碌判定信号 = SphereScene.isInteracting（dragging ||
+  pinching || 自旋速度 ≥0.05 rad/s；静置自转不算忙碌），经
+  onBusyChange→SphereBaker.setBusy 暂停/恢复队列；另有
+  busyProvider 实时对账，防止场景中途离屏（update 停转）后 busy
+  标志过期把队列永久暂停。规格刷新同理：MapView 全部刷新触发点
+  （onAppear、accounts/identities 变更、baker.revision）改走
+  scheduleRefresh——忙碌时只置 pendingRefresh，静止后由
+  settledTick 统一补一次；revision 合并口径保留并强化（图标落地
+  与烘焙完成共用一个 ~150ms 合并窗）。
+- 纹理预热：configure 的 reconcile 把本轮新建/换装的 SKTexture
+  收集后走 SKTexture.preloadTextures 批量预上传 GPU，完成前气泡
+  以字母块纹理占位，避免首次绘制时扎堆上传。
+- 提前备菜：Store.init 与 Store.adopt 在 IconStore.prefetch 之后
+  调 SphereBaker.prewarm(index) 跑一遍完整规格计算——命中免费、
+  未命中入队并登记图标加载；每个图标落地后再经 noteReady 的
+  reprewarm 把真脸入队，进关系图页时尽量全命中。
+- 追加（用户 2026-11-24 追加要求）：球的黑色阴影去掉。第九轮光影
+  层整层删除——limb darkening 黑色径向渐变、球体底盘（disc）的
+  灰色填充与描边一并拿掉；左上白色高光斑与暗部同在一张纹理里，
+  随暗部一起删除，不保留任何发灰/发黑的底。球面背景回到透明，
+  只剩气泡本身定义球形；连线、标签、自转、惯性等其余行为不变。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮确认。主要风险点：
+(1) 多尾随闭包 enqueue(key:) { produce } apply: { } 的语法与
+@MainActor 隔离（与既有 ensureLoad 的 Task 跳板同模式）；
+(2) SKTexture.preloadTextures 的批量预上传时机（configure 在
+updateUIView 主线程调用，preload 本身异步，完成前绘制走按需上传，
+与第九轮行为一致）；(3) 落盘缓存键含 account.name/domain 原文
+哈希，改名即失效属预期；缓存目录被系统在存储压力下清掉也只是
+回到冷烘焙，无数据风险。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

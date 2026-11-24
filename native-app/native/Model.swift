@@ -471,6 +471,10 @@ final class Store {
     activeID = deck.first?.id
     // decode every icon the first screens will show, off the main thread, before they're needed
     IconStore.shared.prefetch(data.accounts)
+    // and warm the sphere's bake caches behind it （第十轮）: faces and
+    // labels render in small batches off the gesture path, so opening
+    // the sphere tab is cache hits instead of a bake burst
+    SphereBaker.shared.prewarm(index)
   }
 
   static func savedKind() -> String {
@@ -580,6 +584,7 @@ final class Store {
   func adopt(_ d: AtlasData) {
     data = d; remember(); persist()
     IconStore.shared.prefetch(d.accounts)
+    SphereBaker.shared.prewarm(index)   // index already rebuilt by data's didSet
     if active == nil || !deck.contains(where: { $0.id == activeID }) { activeID = deck.first?.id }
   }
 
