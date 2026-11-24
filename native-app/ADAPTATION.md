@@ -1093,6 +1093,62 @@ popover 在 iPhone 上的锚定位置与高度为估算值，真机若觉得卡�
 开 Face ID——这是本条的预期行为（用户明确要面容解锁），不想要
 的人可在屏幕锁设置里关掉，关掉的选择会被尊重。
 
+### 第十四轮（2026-11-25，构建 1042 真机复验反馈，本地提交未推送）
+
+第十三轮的导入修复在 1042 上复验：用户发来选择器截图并明确
+「就是这个样子点不动，也没灰」——她刚导出的「账号备份-….json」
+（57 KB，真实数据）在「我的 iPhone」根目录下渲染完全正常：文件
+名黑色、带文本预览缩略图。**诊断就此修正**：第十三轮的类型修改
+在显示层其实已经生效（不再置灰），剩下的病在选择/结果处理路径
+——点中文件后选择器不关闭、无任何后续，即 .fileImporter 的选择
+提交/结果回调根本没有走完。
+
+通查两条旧回调全路径的结论：处理逻辑本身没有静默分支。Settings
+旧回调里 security-scoped 的 start/stop 时机在回调作用域内、口径
+正确；importBackup 四种终局反馈齐全（成功走 mutate 的「已导入
+X 个身份和 Y 个网站」toast、解码/结构校验不过返回 false 由调用
+方弹「这不是绑哪儿的备份文件」、读不出弹「读不到这个文件」）；
+SmartImport 的 loadFile 全分支都有 setFeedback（识别计数、没识
+别到、SmartImportError、通用解析失败）。既然回调体无漏，点中后
+连选择器都不关只能是回调未被触发——问题在 .fileImporter 的呈
+现/选择机制本身，在她这台机器上自第一批起就没通过。继续在
+.fileImporter 上调类型没有意义，整条通道换实现：
+
+1. **新组件 DocPicker.swift**。UIViewControllerRepresentable 包
+   装 UIDocumentPickerViewController：
+   `forOpeningContentTypes: [UTType.item]`（只给根类型、不给任何
+   具体类型，系统没有可据以过滤/拦截的类型条件）、`asCopy:
+   true`、`allowsMultipleSelection = false`、
+   `shouldShowFileExtensions = true`。View 扩展
+   `docPickerSheet(isPresented:onPick:)` 以 sheet 呈现：选中先
+   收起 sheet、延迟 300ms 再执行回调（沿用第十三轮 popover 的
+   防呈现叠压手法，避免导入成功后的 dismiss/提示压在退场动画
+   上）；delegate 回调 urls 为空的边角当作取消收起，不许把
+   sheet 干挂着无终局；用户取消静默收起（预期行为）。
+2. **asCopy 语义与读取路径**。asCopy 下系统把选中文件拷入本
+   App 沙盒，回调 URL 是沙盒内副本，原 .fileImporter 回调里的
+   startAccessingSecurityScopedResource 包裹全部去掉（对副本
+   URL 套用无意义、且有双保险卡死风险）；两处既有读取逻辑原样
+   复用——Settings 直接 `Data(contentsOf:)` → importBackup 内容
+   校验；SmartImport 直接读 Data → loadFile，filename 仍取
+   lastPathComponent（副本保留原文件名，.csv/.json 分流口径
+   不变）。四种终局在新路径上逐一对齐可见反馈：选中→选择器关
+   闭；读失败→「读不到这个文件」；校验拒绝→「这不是绑哪儿的
+   备份文件」/ loadFile 的解析错误反馈；成功→「已导入 X 个身
+   份和 Y 个网站」toast（智能导入为候选计数反馈）。
+3. **范围**。全仓 .fileImporter 仅此两处，已全换；.fileExporter
+   （导出备份）真机已验可用，保留不动。Info.plist 文档类型保
+   持第十三轮现状（public.json、Viewer/Alternate）不动，「用
+   绑哪儿打开」通道依赖它。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮。若 UIKit 原生
+选择器在她机器上仍是点中无反应，则问题在系统文件提供方层面
+（「我的 iPhone」本地提供方异常），届时正道仍是 WebDAV 恢复与
+「用绑哪儿打开」，文件选择器降级为尽力而为。推送注意：新文件
+native-app/native/DocPicker.swift 需先加入快照清单
+（manifest_paths）才会被推送通道带上；CI 以
+native-app/native/*.swift 通配编译，文件进仓即可编入。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

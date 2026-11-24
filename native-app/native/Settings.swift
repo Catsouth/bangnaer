@@ -116,20 +116,14 @@ struct SettingsSheet: View {
       .fileExporter(isPresented: $exporting, document: doc, contentType: .json, defaultFilename: "账号备份-\(Date().formatted(.iso8601.year().month().day()))") { r in
         if case .success = r { store.show("备份已导出") }
       }
-      // 第十三轮： the type list gains the two root types (.data was
-      // already there; .item is the ancestor of every file type) so no
-      // file can be greyed out on type grounds — what makes a file a
-      // backup is the content check in importBackup, and every failure
-      // path now says so instead of failing silently.
-      .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data, .item, .plainText, .text]) { r in
-        switch r {
-        case .success(let url):
-          let ok = url.startAccessingSecurityScopedResource(); defer { if ok { url.stopAccessingSecurityScopedResource() } }
-          guard let d = try? Data(contentsOf: url) else { store.show("读不到这个文件"); return }
-          if store.importBackup(d) { dismiss() } else { store.show("这不是绑哪儿的备份文件") }
-        case .failure(let e):
-          if !(e is CancellationError) { store.show("没能打开这个文件") }
-        }
+      // 第十四轮： .fileImporter 弃用（见 DocPicker.swift）——第十三轮
+      // 类型修改已让文件不再置灰，但真机点中后选择器不关、回调不走，
+      // 改走手写 UIDocumentPickerViewController（[UTType.item] + asCopy）。
+      // 回调 URL 是沙盒内副本，直接 Data 读取，不再套 security-scoped；
+      // 是不是备份仍由 importBackup 内容校验决定，口径不变。
+      .docPickerSheet(isPresented: $importing) { url in
+        guard let d = try? Data(contentsOf: url) else { store.show("读不到这个文件"); return }
+        if store.importBackup(d) { dismiss() } else { store.show("这不是绑哪儿的备份文件") }
       }
       .confirmationDialog("清空全部数据？", isPresented: $askWipe, titleVisibility: .visible) {
         Button("清空全部数据", role: .destructive) {
