@@ -83,7 +83,7 @@ jobs:
           ls -la native-app/ios/Assets.xcassets/AppIcon.appiconset
       - name: Build unsigned IPA
         env:
-          VERSION: ${{ inputs.version || '0.0' }}
+          VERSION: ${{ inputs.version || '1.0' }}
         run: |
           set -euo pipefail
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
