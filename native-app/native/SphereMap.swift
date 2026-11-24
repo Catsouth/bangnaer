@@ -759,6 +759,24 @@ final class SphereScene: SKScene {
   private(set) var currentZoom: CGFloat = 1
   private var dragging = false
   private var pinching = false
+  // Touch-down brake （第十一轮）: a finger resting on the ball is
+  // interaction even when no SwiftUI gesture has recognised yet —
+  // DragGesture needs travel before it fires, so a press-and-hold
+  // brake never reached beginDrag and the spin had no way to stop.
+  // SphereTouchView reports the raw touch-down / touch-up stream and
+  // the scene brakes HERE, at finger-down, not at recognition time.
+  private var touchHeld = false
+  private var activeTouches = 0
+  /// Stamp of a touch-down that killed a fast spin: the tap that same
+  /// touch sequence may still produce was a brake, not a selection
+  /// (see consumeBrakeTap). Only ever set, never cleared, by touchDown.
+  private var brakeTapStamp: Date? = nil
+  /// A touch-down braking a spin faster than this (rad/s) marks the
+  /// whole sequence brake-only: no bubble tap, no focus clear.
+  static let brakeTapThreshold = 1.5
+  /// A release whose last-~100 ms of real motion stays under this
+  /// angular speed (rad/s) starts no spin （第十一轮）.
+  static let spinStartThreshold = 0.3
   // Interaction reporting for the bake pipeline （第十轮）: the baker
   // pauses its queue and the view defers spec refreshes while this is
   // true, so no ImageRenderer work or texture upload ever lands in
@@ -767,7 +785,7 @@ final class SphereScene: SKScene {
   var onBusyChange: ((Bool) -> Void)? = nil
   private var lastBusy = false
   var isInteracting: Bool {
-    dragging || pinching || (spin.map { $0.speed(at: Date()) >= 0.05 } ?? false)
+    dragging || pinching || touchHeld || (spin.map { $0.speed(at: Date()) >= 0.05 } ?? false)
   }
   private func reportBusy() {
     let b = isInteracting
@@ -856,6 +874,45 @@ final class SphereScene: SKScene {
     }
   }
 
+  // MARK: touch-down brake (raw touch stream, via SphereTouchView)
+
+  /// A finger landed （第十一轮）. The spin dies NOW — its current
+  /// orientation folds into q and the ball freezes under the finger —
+  /// instead of whenever DragGesture gets around to recognising.
+  /// Fast-spin brakes also stamp the sequence: the tap it may still
+  /// produce on lift is suppressed by consumeBrakeTap. This only
+  /// observes the touch; tap / drag / pinch recognition is untouched.
+  func touchDown(extraTouches n: Int) {
+    if let s = spin {
+      if s.speed(at: Date()) > Self.brakeTapThreshold { brakeTapStamp = Date() }
+      commitSpin()
+    }
+    activeTouches += n
+    touchHeld = true
+    lastInteraction = lastTime
+    reportBusy()
+  }
+  /// Fingers lifted; `remaining` is the view's authoritative count
+  /// of touches still down (from the event's allTouches). The hold
+  /// ends only when the LAST touch is up, so a pinch's first finger
+  /// doesn't drop the brake mid-gesture.
+  func touchesUp(remaining: Int) {
+    activeTouches = remaining
+    guard activeTouches == 0 else { return }
+    touchHeld = false
+    lastInteraction = lastTime
+    reportBusy()
+  }
+  /// MapView's tap asks before acting: was this tap the tail of a
+  /// brake on a fast spin? Consumed on first ask, and a stamp older
+  /// than ~0.6 s is stale (its sequence ended in a drag or a pinch,
+  /// which produce no tap) — it must not eat a later, honest tap.
+  func consumeBrakeTap() -> Bool {
+    guard let t = brakeTapStamp else { return false }
+    brakeTapStamp = nil
+    return Date().timeIntervalSince(t) < 0.6
+  }
+
   // MARK: gesture entry points (called from MapView's SwiftUI gestures)
 
   func beginDrag() {
@@ -874,12 +931,15 @@ final class SphereScene: SKScene {
   func endDrag(vx: Double, vy: Double) {
     dragging = false
     lastInteraction = lastTime
-    // Flick → inertia about a fixed axis, same component caps and start
-    // threshold the Canvas spin had; the friction tail lives in SphereSpin.
+    // Flick → inertia about a fixed axis, same component caps as the
+    // Canvas spin had. The start threshold is 0.3 rad/s （第十一轮）:
+    // MapView now samples the release velocity from only the last
+    // ~100 ms of real motion, so a brake-then-lift arrives here with
+    // ~zero velocity and starts nothing.
     let wy = min(max(vx * MapView.radPerPoint, -9), 9)
     let wx = min(max(vy * MapView.radPerPoint, -9), 9)
     let omega = hypot(wx, wy)
-    if omega > 0.25 {
+    if omega > Self.spinStartThreshold {
       spin = SphereSpin(q0: q, axis: Vec3(x: wx / omega, y: wy / omega, z: 0), omega: omega, start: Date())
     }
     reportBusy()
@@ -915,7 +975,7 @@ final class SphereScene: SKScene {
     if let s = spin {
       q = s.orientation(at: Date())
       if s.speed(at: Date()) < 0.05 { spin = nil }
-    } else if !dragging, focus == nil, !specs.isEmpty, currentTime - lastInteraction > 4 {
+    } else if !dragging, !touchHeld, focus == nil, !specs.isEmpty, currentTime - lastInteraction > 4 {
       let dq = Quat.axisAngle(Vec3(x: 0.30, y: 1, z: 0), 0.06 * dt)
       q = dq.times(q).normalized()
     }
@@ -1019,6 +1079,39 @@ final class SphereScene: SKScene {
 
 }
 
+/// SKView that only *observes* the raw touch stream （第十一轮）.
+/// SwiftUI's DragGesture needs points of travel before it recognises,
+/// so a press-and-hold "brake" on a fast-spinning ball never reached
+/// the scene and the spin could not be stopped by grabbing the ball.
+/// touchesBegan reports the instant a finger lands and the scene
+/// brakes there; the touch itself is never intercepted — super gets
+/// every event and SwiftUI's tap / drag / pinch recognisers attached
+/// above this view keep working exactly as before.
+final class SphereTouchView: SKView {
+  var onTouchDown: ((Int) -> Void)? = nil
+  var onTouchesUp: ((Int) -> Void)? = nil
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+    onTouchDown?(touches.count)
+    super.touchesBegan(touches, with: event)
+  }
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+    onTouchesUp?(Self.remainingTouches(in: event))
+    super.touchesEnded(touches, with: event)
+  }
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+    onTouchesUp?(Self.remainingTouches(in: event))
+    super.touchesCancelled(touches, with: event)
+  }
+  /// Touches still down after this event, read off the event itself
+  /// rather than by counting callbacks: the scene's hold state can
+  /// never drift out of sync with the hardware, even if an end or a
+  /// cancel is somehow missed.
+  private static func remainingTouches(in event: UIEvent?) -> Int {
+    guard let all = event?.allTouches else { return 0 }
+    return all.filter { $0.phase != .ended && $0.phase != .cancelled }.count
+  }
+}
+
 /// SwiftUI host for the sphere's SKView. A representable (not SpriteView)
 /// so configure() lands on every SwiftUI update — specs / focus / scheme
 /// changes reach the scene without the scene observing the store itself.
@@ -1031,8 +1124,12 @@ struct SphereSKView: UIViewRepresentable {
   let threadID: String?
   let threadColor: Color
 
-  func makeUIView(context: Context) -> SKView {
-    let v = SKView()
+  func makeUIView(context: Context) -> SphereTouchView {
+    let v = SphereTouchView()
+    // Brake wiring （第十一轮）: raw finger-down / finger-up goes
+    // straight to the scene, ahead of any gesture recognition.
+    v.onTouchDown = { [weak scene] n in scene?.touchDown(extraTouches: n) }
+    v.onTouchesUp = { [weak scene] remaining in scene?.touchesUp(remaining: remaining) }
     v.allowsTransparency = true
     v.backgroundColor = .clear
     v.preferredFramesPerSecond = 120   // ProMotion where the hardware has it; clamped elsewhere
@@ -1049,7 +1146,7 @@ struct SphereSKView: UIViewRepresentable {
     v.presentScene(scene)
     return v
   }
-  func updateUIView(_ v: SKView, context: Context) {
+  func updateUIView(_ v: SphereTouchView, context: Context) {
     scene.configure(specs: specs, focus: focus, scheme: scheme, threadID: threadID, threadColor: threadColor)
   }
 }
@@ -1070,8 +1167,11 @@ struct MapView: View {
   @State private var scene = SphereScene(size: CGSize(width: 320, height: 320))
   // gesture bookkeeping
   @State private var dragStarted = false
-  @State private var dragLast: (date: Date, t: CGSize)? = nil
-  @State private var dragVel: CGSize = .zero
+  // Release-velocity samples （第十一轮）: every drag change appends
+  // (time, translation); the flick velocity is computed from only the
+  // last ~100 ms of samples, so a finger that braked (pressed, held
+  // still, lifted) contributes no fresh motion and re-spins nothing.
+  @State private var dragSamples: [(date: Date, t: CGSize)] = []
   @State private var pinchBase: CGFloat? = nil
   // Bubble specs are computed once and cached （第六轮）: body re-evaluates on
   // every drag frame, and rebuilding 150+ specs (plus groupCounts re-deriving
@@ -1239,16 +1339,16 @@ struct MapView: View {
         if !dragStarted {
           scene.beginDrag()
           dragStarted = true
-          // The drag only starts past its minimum distance; swallowing that
-          // first sample (no rotation, just the baseline) keeps the ball
-          // from jumping when rotation kicks in (patch batch).
-          dragVel = .zero
-          dragLast = (v.time, v.translation)
+          // The drag only starts past its minimum distance; the first
+          // sample is the baseline only (no rotation from it), which
+          // keeps the ball from jumping when rotation kicks in (patch
+          // batch) — but it does anchor the velocity window.
+          dragSamples = [(v.time, v.translation)]
           return
         }
-        let last = dragLast!
-        let dx = Double(v.translation.width - last.t.width)
-        let dy = Double(v.translation.height - last.t.height)
+        let lastT = dragSamples.last?.t ?? v.translation
+        let dx = Double(v.translation.width - lastT.width)
+        let dy = Double(v.translation.height - lastT.height)
         if dx != 0 || dy != 0 {
           // Trackball increment （第六轮）: the scene rotates about the
           // screen-space axis perpendicular to this step's drag direction,
@@ -1256,21 +1356,39 @@ struct MapView: View {
           // is unlimited — see SphereScene.dragBy.
           scene.dragBy(dx: dx, dy: dy)
         }
-        let dt = v.time.timeIntervalSince(last.date)
-        if dt > 0.016 {
-          dragVel = CGSize(width: (v.translation.width - last.t.width) / CGFloat(dt),
-                           height: (v.translation.height - last.t.height) / CGFloat(dt))
-        }
-        dragLast = (v.time, v.translation)
+        dragSamples.append((v.time, v.translation))
+        // Keep the buffer lean: the velocity window is ~100 ms, so
+        // anything older than ~300 ms can never be sampled again.
+        let cutoff = v.time.addingTimeInterval(-0.3)
+        dragSamples.removeAll { $0.date < cutoff }
       }
-      .onEnded { _ in
+      .onEnded { v in
         dragStarted = false
-        dragLast = nil
+        dragSamples.append((v.time, v.translation))
+        let vel = flickVelocity(at: v.time)
+        dragSamples = []
         // Flick → the scene's friction spin (no haptic on spin start
         // （第五轮）: sliding the ball stays silent; pressTick belongs
         // only to the segment long-press).
-        scene.endDrag(vx: Double(dragVel.width), vy: Double(dragVel.height))
+        scene.endDrag(vx: Double(vel.width), vy: Double(vel.height))
       }
+  }
+
+  /// Release velocity from the last ~100 ms of real samples only
+  /// （第十一轮）. A braked release — finger held still before lifting —
+  /// leaves the in-window samples all sitting on one translation (the
+  /// final sample appended by onEnded included), so the window's
+  /// displacement is zero and endDrag's 0.3 rad/s threshold stays
+  /// shut. A true flick keeps its full speed: the spin's caps and
+  /// friction are unchanged, only the "stop" path changed.
+  func flickVelocity(at end: Date) -> CGSize {
+    let recent = dragSamples.filter { $0.date >= end.addingTimeInterval(-0.1) }
+    guard let first = recent.first, let last = recent.last,
+          end.timeIntervalSince(last.date) < 0.05 else { return .zero }
+    let dt = last.date.timeIntervalSince(first.date)
+    guard dt > 0.008 else { return .zero }
+    return CGSize(width: (last.t.width - first.t.width) / CGFloat(dt),
+                  height: (last.t.height - first.t.height) / CGFloat(dt))
   }
 
   var pinchGesture: some Gesture {
@@ -1286,6 +1404,13 @@ struct MapView: View {
   }
 
   func tap(at loc: CGPoint, in size: CGSize) {
+    // Brake taps （第十一轮）: a tap whose touch-down killed a fast
+    // spin was a brake, not a selection — the ball already stopped at
+    // finger-down; this sequence must not also open a bubble's detail
+    // or clear the focus from under the user's finger. Low-speed and
+    // stationary taps never set the stamp, so their behaviour is
+    // exactly what it was.
+    if scene.consumeBrakeTap() { scene.noteInteraction(); return }
     // hit-testing projects through the very same quaternion the scene is
     // showing (the live spin orientation while a flick is still decaying)
     let qNow = scene.currentOrientation()

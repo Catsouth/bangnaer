@@ -860,6 +860,56 @@ updateUIView 主线程调用，preload 本身异步，完成前绘制走按需�
 哈希，改名即失效属预期；缓存目录被系统在存储压力下清掉也只是
 回到冷烘焙，无数据风险。
 
+### 第十一轮（2026-11-24，构建号 1038 真机验收反馈，本地提交未推送）
+
+用户原话：「我想要的是快速转动且可以随时停止」。真机视频实证：
+甩动后球高速自旋，手指按上去想让它停，停不下来。根因在手势层，
+不在渲染：SwiftUI DragGesture 有最小识别距离（本 App 设 4pt），
+「按住不动」这种刹车动作根本不触发 drag 的 begin，场景里的自旋
+没人取消；且旧的速度采样只在 onChanged 间隔 >16ms 时更新，刹车
+后抬手会把手指移动期的旧速度当成松手速度重新赋速。本轮只改
+「停」的路径，转速口径（角速度上限 ±9 rad/s、衰减 1.7、滑行
+约 2–4 秒）一律不动，不许用改慢来假装好停。
+
+- 触摸即刹车：新增 SphereTouchView（SKView 子类），只覆写
+  touchesBegan/Ended/Cancelled 做旁路观察——回调先报信、再
+  super，绝不拦截，SwiftUI 的 tap/drag/pinch 识别器照常工作。
+  touchesBegan → scene.touchDown：当场 commitSpin 把当前姿态折
+  回 q 并清零自旋，球在指尖落下的瞬间就停，不等手势识别。
+  touchesEnded/Cancelled → scene.touchesUp：剩余触摸数直接读
+  event.allTouches 的权威口径（不靠回调计数，防漂移卡死），
+  最后一根手指抬起才解除按压锁定。
+- 按住即锁定：新增 touchHeld 状态，按压期间并入
+  isInteracting（烘焙避让口径不回归，第十轮信号沿用），且
+  update() 的静置自转守卫加 !touchHeld——按住时球完全静止，
+  随后 DragGesture 识别后照常 1:1 四元数拖动（beginDrag 的
+  commitSpin 此时是 no-op）。
+- 松手不重新赋速：MapView 的速度记账从单点 dragVel 改为样本
+  缓冲 dragSamples（每次 onChanged 追加 (时间， 位移），只留
+  最近 300ms)。flickVelocity 只取松手前约 100ms 窗口内的样本
+  算位移速度；刹车抬手时窗口内样本全停在同一位移上，速度读
+  为零。endDrag 启旋阈值由 0.25 提到 0.3 rad/s
+  (SphereScene.spinStartThreshold)，与窗口采样配套。
+- 高速点按只刹车：touchDown 时若自旋速度 > 1.5 rad/s
+  (brakeTapThreshold)，给这次触摸序列打戳 brakeTapStamp;
+  MapView.tap 开头先问 scene.consumeBrakeTap——命中则只记一
+  次交互（重置静置自转计时）便返回，不进气泡详情、不清聚焦。
+  戳被首次询问消费，且超过 0.6s 视为过期（其序列必然结束于
+  拖动或捏合，不产生 tap)，不会误吃之后的一次正常点选；低速
+  与静止时的点选口径完全不变。
+- 静置自转（4 秒后慢转）被触摸打断的口径不变：touchDown 与
+  touchesUp 都刷新 lastInteraction。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮确认。主要风险
+点：(1) SphereTouchView 的 touchesBegan 能否稳定收到触摸——
+SKView 是命中测试的叶子视图，理论上与 Canvas 时代一致；若
+真机出现手势被吞或刹车不触发，改走 Coordinator 识别器或场景
+touches 兜底。(2) onTapGesture 与 touchesEnded 的时序：刹车戳
+不依赖两者先后（tap 侧主动消费 + 0.6s 过期窗），但极端时序下
+一次「刹车后 0.6s 内的异指快速点选」会被误抑制一次，属可接
+受偏差。(3) 样本窗口对「急停前 100ms 内仍有真实位移」的抬手
+会按窗口平均速度赋速——那是真实甩动而非刹车，符合口径。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；
