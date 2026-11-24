@@ -852,7 +852,7 @@ final class SphereScene: SKScene {
       }
     }
     if !freshTextures.isEmpty {
-      SKTexture.preloadTextures(freshTextures) {}
+      SKTexture.preload(freshTextures) {}
     }
   }
 
