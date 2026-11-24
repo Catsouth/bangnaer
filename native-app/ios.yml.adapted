@@ -25,6 +25,10 @@
 #    AppIcon.appiconset 的 Contents.json。
 # 9. 本文件的 YAML 缩进已规范化为 2 空格（备稿初版缩进丢失、解析不过，已修复；
 #    逻辑与上游一致）。
+# 10. （第十三轮）ipa job 的默认 VERSION 由 '0.0' 改为 '1.0'：此前 push
+#     构建一律 0.0，App 设置页显示「当前 0.0」。改后默认即 1.0；构建号
+#     口径不变（git 提交数 + 1000）。注意：本文件只是备稿，改完需重新
+#     上传覆盖 GitHub 上的 .github/workflows/ios.yml 才在 CI 生效。
 #
 # 保留的上游结构：swiftc 直编 + 手工组装 .app、Info.plist 放 zip 第一位、
 # 模拟器截图 job、构建号 = git 提交数 + 1000、启动参数 -atlasTab / -atlasRoute /
@@ -83,7 +87,10 @@ jobs:
           ls -la native-app/ios/Assets.xcassets/AppIcon.appiconset
       - name: Build unsigned IPA
         env:
-          VERSION: ${{ inputs.version || '0.0' }}
+          # 第十三轮： push 构建的默认版本曾是 0.0，设置页「当前 0.0」
+          # 即源于此。发行暂定 1.0 起：默认改 1.0，正式发行仍可由
+          # release.yml 以 inputs.version 显式传版号覆盖。
+          VERSION: ${{ inputs.version || '1.0' }}
         run: |
           set -euo pipefail
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)

@@ -995,6 +995,104 @@ ScrollView + LazyVStack 下 contextMenu 预览与裁剪的交互，可
 无感。(3) 第 6 条弹簧参数（ω/ζ/吸附区 1.15）是手感量，真机
 觉得过冲太软/太硬时只调这三个数。
 
+### 第十三轮（2026-11-25，构建号 1040 真机验收反馈，本地提交未推送）
+
+1040 发行后用户逐项验收：长按菜单、身份标题等已过，但导入通道在
+她机器上仍然全灭（设置「导入备份」文件选择器里 atlas.json 灰色
+不可选），另攒下五条：切页残影没治干净、分段长按不要底部大表、
+版本号还是 0.0、载入示例一点就执行、面容解锁「没有」。本轮八条
+打包，逐条如下。
+
+1. **导入备份选不了文件（定案）**。两层原因。（a）文档类型过度
+   声明：Info.plist 的 CFBundleDocumentTypes 把 public.data（一切
+   文件类型的祖先）也列为本 App 的文档类型，又开着
+   LSSupportsOpeningDocumentsInPlace——App 等于宣称「所有文件都是
+   我的文档」，系统文件选择器在给本 App 挑文件时，atlas.json 这类
+   恰被本 App 声明在内的文件反而被置灰（导入器里明明已含 .data
+   兜底仍置灰，反证问题不在导入器类型窄）。改：LSItemContentTypes
+   只留 public.json（备份的真实格式），宣称范围与「用绑哪儿打开」
+   的用途重新自洽。（b）导入器类型集补齐根类型：Settings 的
+   fileImporter 改为 [.json, .data, .item, .plainText, .text]
+   （.item 是一切文件类型的根，类型层面再无文件可被置灰）；同时
+   失败路径不再静默——picker 报错（非取消）弹「没能打开这个
+   文件」，读不出内容弹「读不到这个文件」，内容校验不过仍走原有
+   「这不是绑哪儿的备份文件」。选什么由类型放行、是不是备份由
+   importBackup 的内容校验决定，口径不变。
+2. **智能导入文件通道**。同一病根同一改法：allowedContentTypes
+   加 .item 兜底，.json/.csv/.txt 必然可选；picker 失败（非取消）
+   改走页内 feedback 报错，不再 `guard else return` 静默消失；
+   解析与去重预览流程未动，坏文件仍由 loadFile 的既有反馈兜底。
+3. **导出/导入类型自洽（复查）**。导出走 fileExporter +
+   BackupDoc（contentType .json，文件名「账号备份-日期」无扩展名
+   时系统按 .json 补），导出物 UTI 即 public.json：落在第 1 条改后
+   的文档类型声明（public.json）与导入器类型集（.json 在内）双重
+   覆盖内，自己导出的一定能被自己导入选中。分享单行为未动。
+   「用绑哪儿打开」（onOpenURL）走的正是 public.json 声明，收窄
+   后不受影响，反而不再对全系统任意文件宣称打开权。
+4. **底栏切换残影（复修，第十二轮第 1 条未治净）**。上轮把离场页
+   opacity 归零后，真机仍见新旧两页半透明叠加——定案在进场页自
+   身：TabEnter 对进入页用 Motion.tab 把 opacity 0→1 并带 28pt
+   横移做 0.4 秒弹簧入场，整个入场期间新页就是一张半透明膜，
+   压在 TabView 切换时仍在合成的旧页上，非球面页互切同叠与此
+   吻合（与 SKView 无关，上轮的 SKView 按页签挂载保留，无害）。
+   改：TabEnter 改为直通（不再做任何 opacity/offset 动画），切
+   页签即整页瞬间完全不透明出现，任何一帧画面里只有一个页面；
+   各页根背景经复核为不透明（Glow 底色 black/#f2f2f7 + 径向渐
+   变、设置页是 Form），无透底隐患。底栏玻璃胶囊自身的滑块动画
+   不涉及页面内容，保留。代价：页签切换失去滑入动效，换确定性
+   的干净切换，用户验收口径优先。
+5. **分段长按改浮窗弹出**。原来长按分段从屏幕底部滑出
+   GroupIdentitiesSheet（.sheet + medium/large detents）；用户对
+   照 iOS「文件」App 长按：要被按的东西就地不动、列表以浮窗就近
+   贴着弹出。改：sheet 改为锚定分段栏（legend 胶囊）的
+   .popover（attachmentAnchor 取栏自身 bounds、arrowEdge .top）
+   + .presentationCompactAdaptation(.popover)（iPhone 上不被系
+   统降级回 sheet），内容与交互原样（点身份聚焦、底部按组添加
+   入口、计数徽章、标题直出值）；高度按行数算（58 + 行×64 +
+   添加区，上限 480 内部滚动）。popover 没有 onDismiss：添加路
+   由改由 groupSheet 关闭沿触发、延迟 300ms 再 applyPendingAdd，
+   防 RootView 的 sheet 压在还在退场的 popover 上。
+6. **版本号 1.0**。根因：CI（ios.yml）ipa job 的 VERSION 默认
+   `${{ inputs.version || '0.0' }}`，push 构建没人传版号，于是
+   Info.plist 模板的 __VERSION__ 一律被替换成 0.0，设置页「当前
+   0.0」即源于此。改生成源头：native-app/ios.yml.adapted 的默认
+   改 '1.0'（发行暂定 1.0 起；release.yml 显式传版号时仍覆盖），
+   构建号口径不变（git 提交数 + 1000）。注意备稿改完需重新上传
+   覆盖 GitHub 的 .github/workflows/ios.yml 才在 CI 生效（见文末
+   手动事项）。
+7. **载入示例加确认弹窗**。原来点「载入示例」直接
+   `s = Store.demo()` 整表替换——一次误点即覆盖全部真实记录且
+   无任何提示。改：点击先弹 confirmationDialog（与「清空全部数
+   据」同款），文案明说会替换当前全部记录、建议先导出备份；
+   「载入示例」为 destructive 按钮，确认才执行原逻辑，取消不
+   动数据。
+8. **面容解锁做正**。现状定案：Face ID 本来就有，但藏在「设置
+   PIN 之后再去屏幕锁设置里开一个默认关着的开关」后面——用户
+   设了 PIN 没开开关，锁屏就只剩 PIN，感知即「没有面容解锁」。
+   改成一等路径：(a) AppLock 初始化时，已有 PIN 且从未存过
+   bio 开关值、设备又支持生物识别 → 默认开（存过的显式选择，
+   开或关，都尊重）；(b) setPIN 成功即自动开 bio（设备支持
+   时），PIN 退居兜底；(c) 锁屏在 PIN 圆点下方加整宽「用面容
+   ID 解锁」按钮（原键盘角落的小键保留），自动验证（onAppear
+   既有逻辑）失败/取消后有一眼可见的重试入口；(d) 屏幕锁设置
+   的开关保留（可关），页脚文案写明「锁屏一出现就自动验证、
+   锁屏上可点按钮再验、不过时用 PIN」。NSFaceIDUsageDescription
+   模板里已有（「用于解锁绑哪儿」），无需补。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮确认。主要风险
+点：(1) 第 1 条置灰定案中「文档类型过度声明」一层是基于代码
+异常 + 症状反证的推断（导入器已有 .data 仍置灰），若真机仍选
+不了同一个 atlas.json，下一嫌疑是该文件所在位置的文件提供方
+（WebDAV/第三方网盘目录）不回 UTI，届时以「用绑哪儿打开」与
+WebDAV 恢复为正道、文件选择器降级为尽力而为。(2) 第 5 条
+popover 在 iPhone 上的锚定位置与高度为估算值，真机若觉得卡片
+过大/过小，调 groupPopoverHeight 的参数即可。(3) 第 6 条只改
+了备稿 ios.yml.adapted，CI 生效需用户把备稿重新上传覆盖
+.github/workflows/ios.yml；未上传前 push 构建仍是 0.0。
+(4) 第 8 条 (a) 会让「从没动过开关」的存量用户下次启动即默认
+开 Face ID——这是本条的预期行为（用户明确要面容解锁），不想要
+的人可在屏幕锁设置里关掉，关掉的选择会被尊重。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

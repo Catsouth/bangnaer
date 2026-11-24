@@ -21,6 +21,7 @@ struct SettingsSheet: View {
   @State private var exporting = false
   @State private var importing = false
   @State private var askWipe = false
+  @State private var askDemo = false
   @State private var doc = BackupDoc(data: Data())
 
   var body: some View {
@@ -78,7 +79,7 @@ struct SettingsSheet: View {
           Button { doc = BackupDoc(data: store.backupJSON()); exporting = true } label: { Label("导出备份", systemImage: "square.and.arrow.up") }
           Button { importing = true } label: { Label("导入备份", systemImage: "square.and.arrow.down") }
           if !sync.on {
-            Button { store.mutate("已载入示例") { s in s = Store.demo() }; store.data.demo = true; store.persist(); store.setKind("email") } label: { Label("载入示例", systemImage: "text.badge.plus") }
+            Button { askDemo = true } label: { Label("载入示例", systemImage: "text.badge.plus") }
           }
         } footer: { Text("备份是 JSON 文件，和网页版通用。智能导入从密码管理器导出、浏览器密码表或一段文字里认出服务和绑定关系，只读网址和账号名，不读密码。") }
         Section {
@@ -115,10 +116,20 @@ struct SettingsSheet: View {
       .fileExporter(isPresented: $exporting, document: doc, contentType: .json, defaultFilename: "账号备份-\(Date().formatted(.iso8601.year().month().day()))") { r in
         if case .success = r { store.show("备份已导出") }
       }
-      .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data, .plainText]) { r in
-        guard case .success(let url) = r else { return }
-        let ok = url.startAccessingSecurityScopedResource(); defer { if ok { url.stopAccessingSecurityScopedResource() } }
-        if let d = try? Data(contentsOf: url), store.importBackup(d) { dismiss() } else { store.show("这不是绑哪儿的备份文件") }
+      // 第十三轮： the type list gains the two root types (.data was
+      // already there; .item is the ancestor of every file type) so no
+      // file can be greyed out on type grounds — what makes a file a
+      // backup is the content check in importBackup, and every failure
+      // path now says so instead of failing silently.
+      .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data, .item, .plainText, .text]) { r in
+        switch r {
+        case .success(let url):
+          let ok = url.startAccessingSecurityScopedResource(); defer { if ok { url.stopAccessingSecurityScopedResource() } }
+          guard let d = try? Data(contentsOf: url) else { store.show("读不到这个文件"); return }
+          if store.importBackup(d) { dismiss() } else { store.show("这不是绑哪儿的备份文件") }
+        case .failure(let e):
+          if !(e is CancellationError) { store.show("没能打开这个文件") }
+        }
       }
       .confirmationDialog("清空全部数据？", isPresented: $askWipe, titleVisibility: .visible) {
         Button("清空全部数据", role: .destructive) {
@@ -126,6 +137,15 @@ struct SettingsSheet: View {
           store.setKind(store.kind); dismiss()
         }
       } message: { Text(sync.on ? "所有邮箱、手机号和网站记录都会删除，开了同步的其他设备也会一起清空。建议先导出备份。" : "所有邮箱、手机号和网站记录都会从这台设备上删除。建议先导出备份。") }
+      // Loading the demo replaces the whole data set (Store.demo()),
+      // so it gets the same confirm-first treatment as wiping （第十三轮）:
+      // one tap used to throw the user's real records away with no warning.
+      .confirmationDialog("载入示例数据？", isPresented: $askDemo, titleVisibility: .visible) {
+        Button("载入示例", role: .destructive) {
+          store.mutate("已载入示例") { s in s = Store.demo() }; store.data.demo = true; store.persist(); store.setKind("email")
+        }
+        Button("取消", role: .cancel) {}
+      } message: { Text("示例数据会替换当前全部记录，现在的邮箱、手机号和网站都会被覆盖。想保留的话，先导出一份备份。") }
     }
   }
   var syncStatus: String {

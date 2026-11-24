@@ -26,7 +26,20 @@ final class AppLock {
     let has = UserDefaults.standard.string(forKey: "bind.lock.hash") != nil
     enabled = has
     locked = has
-    bioOn = UserDefaults.standard.bool(forKey: "bind.lock.bio")
+    // 第十三轮： Face ID used to be opt-in via a settings toggle that
+    // defaulted off, so a user who set a PIN and never went looking
+    // for the switch perceived there was no Face ID unlock at all.
+    // Now: if a PIN exists and the device can do biometrics, bio is
+    // ON unless the user has explicitly toggled it (a stored value,
+    // either way, is respected as their choice).
+    if has, let saved = UserDefaults.standard.object(forKey: "bind.lock.bio") as? Bool {
+      bioOn = saved
+    } else if has && LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) {
+      bioOn = true
+      UserDefaults.standard.set(true, forKey: "bind.lock.bio")
+    } else {
+      bioOn = UserDefaults.standard.bool(forKey: "bind.lock.bio")
+    }
   }
 
   var pinLength: Int { UserDefaults.standard.integer(forKey: "bind.lock.len") }
@@ -50,6 +63,10 @@ final class AppLock {
     enabled = true
     fails = 0
     UserDefaults.standard.removeObject(forKey: "bind.lock.cool")
+    // Setting a PIN turns biometrics on too (when the device can):
+    // Face ID is the primary way in, the PIN is the fallback （第十三轮）.
+    // The settings toggle can still turn it back off.
+    if bioAvailable { bioOn = true }
   }
 
   /// also used by the settings screens to gate 修改 / 关闭 PIN
@@ -74,6 +91,7 @@ final class AppLock {
       UserDefaults.standard.removeObject(forKey: k)
     }
     bioOn = false
+    UserDefaults.standard.removeObject(forKey: "bind.lock.bio")
     enabled = false
     locked = false
     fails = 0
@@ -153,6 +171,26 @@ struct LockView: View {
         .padding(.top, 26)
         .modifier(ShakeEffect(animatableData: CGFloat(shake)))
         .animation(.easeInOut(duration: 0.35), value: shake)
+        // Face ID as a first-class path in （第十三轮）: it auto-fires
+        // on appear (onAppear below), and this full-width button is
+        // the obvious way to fire it again after a cancel/failure —
+        // previously the only retry was a small key in the keypad's
+        // corner, which is why Face ID felt absent.
+        if lock.bioOn && lock.bioAvailable {
+          Button {
+            Task { if await lock.tryBiometrics() { lock.unlock() } }
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: lock.bioName == "指纹" ? "touchid" : "faceid").font(.system(size: 20))
+              Text("用\(lock.bioName)解锁").font(.system(size: 16, weight: .medium))
+            }
+            .padding(.horizontal, 22).padding(.vertical, 11)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
+          }
+          .buttonStyle(PressStyle(scale: 0.96))
+          .foregroundStyle(.primary)
+          .padding(.top, 22)
+        }
         keypad.padding(.top, 34)
         Spacer()
       }
@@ -234,7 +272,7 @@ struct LockSettingsView: View {
           Button("修改 PIN") { sheet = .change }
           Button("关闭 PIN", role: .destructive) { sheet = .disable }
         } footer: {
-          Text(lock.bioAvailable ? "关掉 PIN 需要先输一次当前 PIN。" : "这台设备不能用生物识别，只能用 PIN。关掉 PIN 需要先输一次当前 PIN。")
+          Text(lock.bioAvailable ? "开着\(lock.bioName)解锁时，锁屏一出现就会自动验证面容/指纹，也可以在锁屏上点按钮再验一次；验证不过时用 PIN。关掉 PIN 需要先输一次当前 PIN。" : "这台设备不能用生物识别，只能用 PIN。关掉 PIN 需要先输一次当前 PIN。")
         }
       }
     }

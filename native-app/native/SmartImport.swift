@@ -321,12 +321,21 @@ struct SmartImportView: View {
     }
     .navigationTitle("智能导入").navigationBarTitleDisplayMode(.inline)
     .onAppear { hasClip = UIPasteboard.general.hasStrings }
-    .fileImporter(isPresented: $picking, allowedContentTypes: [.json, .commaSeparatedText, .plainText, .text, .data]) { r in
-      guard case .success(let url) = r else { return }
-      let scoped = url.startAccessingSecurityScopedResource()
-      defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-      guard let data = try? Data(contentsOf: url) else { setFeedback("读不到这个文件。", bad: true); return }
-      loadFile(data: data, filename: url.lastPathComponent)
+    // 第十三轮： .item joins the list as the universal fallback (every
+    // file type conforms to it), so .json/.csv/.txt exports can never
+    // be greyed out on type grounds; whether a file parses is still
+    // decided by loadFile, which reports bad files in-page. A picker
+    // failure (not a cancel) now also surfaces instead of vanishing.
+    .fileImporter(isPresented: $picking, allowedContentTypes: [.json, .commaSeparatedText, .plainText, .text, .data, .item]) { r in
+      switch r {
+      case .success(let url):
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { setFeedback("读不到这个文件。", bad: true); return }
+        loadFile(data: data, filename: url.lastPathComponent)
+      case .failure(let e):
+        if !(e is CancellationError) { setFeedback("没能打开这个文件。", bad: true) }
+      }
     }
   }
 

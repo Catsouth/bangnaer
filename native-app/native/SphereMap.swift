@@ -1365,19 +1365,14 @@ struct MapView: View {
     .onChange(of: baker.settledTick) { _, _ in
       if pendingRefresh { pendingRefresh = false; refreshBubbles() }
     }
-    .sheet(item: $groupSheet, onDismiss: applyPendingAdd) { g in
-      GroupIdentitiesSheet(group: g,
-                           onPick: { i in
-                             withAnimation(Motion.smooth) { focus = .identity(i.id) }
-                             groupSheet = nil
-                           },
-                           onAdd: { t in
-                             pendingAdd = t
-                             groupSheet = nil
-                           })
-        .environment(store)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+    // 第十三轮： the group list is a popover now (see legend), and a
+    // popover has no onDismiss — when it closes with an add pending,
+    // fire the route a beat later so RootView's sheet never stacks
+    // over the still-dismissing popover.
+    .onChange(of: groupSheet) { old, new in
+      if old != nil && new == nil && pendingAdd != nil {
+        Task { try? await Task.sleep(for: .milliseconds(300)); applyPendingAdd() }
+      }
     }
   }
 
@@ -1553,6 +1548,27 @@ struct MapView: View {
       .padding(3)
       .glassSurface(Capsule(), interactive: true)
       .animation(Motion.smooth, value: focus)
+      // 第十三轮： long-pressing a segment pops the group's identity
+      // list as a floating card anchored to this bar — the Files-app
+      // long-press feel the user asked for (pressed thing stays put,
+      // a panel appears right next to it) — instead of a sheet
+      // sliding up from the bottom of the screen. The compact
+      // adaptation is what keeps it a true popover on iPhone rather
+      // than letting the system turn it back into a sheet.
+      .popover(item: $groupSheet, attachmentAnchor: .rect(.bounds), arrowEdge: .top) { g in
+        GroupIdentitiesSheet(group: g,
+                             onPick: { i in
+                               withAnimation(Motion.smooth) { focus = .identity(i.id) }
+                               groupSheet = nil
+                             },
+                             onAdd: { t in
+                               pendingAdd = t
+                               groupSheet = nil
+                             })
+          .environment(store)
+          .frame(width: 320, height: groupPopoverHeight(g))
+          .presentationCompactAdaptation(.popover)
+      }
       Text("拖动旋转 · 捏合缩放 · 长按分段查看身份").font(.system(size: 11)).foregroundStyle(.secondary)
         .padding(.leading, 6)
       // Current identity focus, spelled out （第十二轮）: picking an
@@ -1576,12 +1592,12 @@ struct MapView: View {
 
   /// A segment is still a focus toggle: tap it and the sphere keeps only that
   /// group lit (the SphereFocus.group dimming); tap it again — or tap empty
-  /// sphere — to clear. Long-press opens the group's identity sheet instead
+  /// sphere — to clear. Long-press opens the group's identity popover instead
   /// （第三轮细化）: the group's existing cards plus its trimmed add entries
   /// (see GroupIdentitiesSheet). The tap / long-press pair hangs on the label
   /// view itself, not a Button — a Button fires its action on touch-up even
   /// when a long-press recogniser completes, which would toggle the focus
-  /// behind the sheet.
+  /// behind the popover.
   func segment(_ g: SphereGroup) -> some View {
     let on = focus == .group(g)
     return HStack(spacing: 5) {
@@ -1613,18 +1629,28 @@ struct MapView: View {
     .accessibilityAddTraits(on ? [.isButton, .isSelected] : [.isButton])
   }
 
-  /// The group sheet's add entries apply their route only once the sheet has
-  /// fully dismissed — RootView's sheet can't stack over this one.
+  /// The group popover's add entries apply their route only once the
+  /// popover has dismissed — RootView's sheet can't stack over it.
   func applyPendingAdd() {
     guard let t = pendingAdd else { return }
     pendingAdd = nil
     store.route = .newIdentity(t)
   }
+
+  /// Popover height for a group's list: title bar + identity rows +
+  /// the add section, capped so a long group scrolls inside the card
+  /// instead of covering the sphere （第十三轮）.
+  func groupPopoverHeight(_ g: SphereGroup) -> CGFloat {
+    let rows = store.data.identities.filter { SphereGroup.of($0) == g }.count
+    let list = rows == 0 ? 54 : CGFloat(rows) * 64
+    let total = 58 + list + 40 + CGFloat(groupAddOptions(g).count) * 48
+    return min(480, max(230, total))
+  }
 }
 
 /// Add entries per group, trimmed （第二轮细化）: Email offers only 添加邮箱，
 /// SIM only 添加手机号， 自定义 (and 未绑定） keep all three. Shared by the
-/// group sheet.
+/// group popover.
 struct GroupAddOption: Identifiable {
   let type: String, title: String, icon: String
   var id: String { type }
@@ -1637,14 +1663,15 @@ func groupAddOptions(_ g: SphereGroup) -> [GroupAddOption] {
   return out
 }
 
-/// Second-level sheet behind a legend segment's long-press （第三轮细化）: the
+/// Popover card behind a legend segment's long-press （第三轮细化 as a
+/// sheet; 第十三轮 as an anchored popover, same content): the
 /// group's existing identity cards — the identity's value as the headline
 /// （第十二轮： it used to be store.title, which for smart-imported cards
 /// is the placeholder label 「自动识别」 on every single row, the real
 /// address demoted to the small print）, the label / kind as the small
 /// print, bound-count badge, each in its own skin like the original
 /// app's map listed them down its left column. Tapping a card focuses
-/// the sphere on that identity (threads and all) and closes the sheet;
+/// the sphere on that identity (threads and all) and closes the popover;
 /// the group's add entries stay in their own section below.
 struct GroupIdentitiesSheet: View {
   @Environment(Store.self) var store

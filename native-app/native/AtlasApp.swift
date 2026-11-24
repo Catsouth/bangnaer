@@ -402,43 +402,24 @@ extension EnvironmentValues {
   var selectedTab: Int { get { self[SelectedTabKey.self] } set { self[SelectedTabKey.self] = newValue } }
 }
 
-/// The page you switch to slides in a little from the side you came from and settles with a
-/// critically-damped spring, like a navigation push but lighter. Hidden state is set while the
-/// page is off screen, so it never flashes before animating.
-///
-/// 第十二轮 — tab-switch ghosting fix. The old hidden state was
-/// opacity 0.35 (not 0), and the outgoing page kept shown = true for
-/// a further 0.5 s after deselection, so during a switch the two
-/// pages were both composited at partial opacity and the previous
-/// page printed through the incoming one's entrance spring — the
-/// residual image seen on device. Now a deselected page drops to
-/// opacity 0 in the same frame, with animations disabled, and
-/// hidden pages sit at 0: the outgoing page contributes nothing
-/// from the instant it is deselected, and the incoming (opaque
-/// beyond its own fade) page has nothing under it to show through.
+/// 第十三轮 — tab-switch ghosting, second fix. The twelfth round
+/// zeroed the OUTGOING page, but the device recording still showed
+/// the two pages blended — because the INCOMING page was itself the
+/// translucent one: TabEnter animated it from opacity 0 (and a 28 pt
+/// sideways offset) up to full over Motion.tab's 0.4 s spring, so
+/// for the whole entrance the new page was a half-transparent sheet
+/// sliding over whatever sat beneath it (the old page, which TabView
+/// keeps composited during the switch). Root cause, settled: an
+/// entrance fade has no business on a tab switch. TabEnter is now a
+/// pass-through — the selected page is simply there, fully opaque,
+/// from the first frame, and no frame ever contains two pages. The
+/// modifier (and its call sites / dir plumbing) stays so the change
+/// is one place, and the liquid-glass bottom bar keeps its own
+/// thumb animation, which never touched page content.
 struct TabEnter: ViewModifier {
   let index: Int, tab: Int, dir: CGFloat
-  @State private var shown: Bool
-  init(index: Int, tab: Int, dir: CGFloat) {
-    self.index = index; self.tab = tab; self.dir = dir
-    _shown = State(initialValue: index == tab)
-  }
   func body(content: Content) -> some View {
-    // Scoped animation: only the opacity/offset animate. The page's own layout (large title,
-    // scroll insets) is never pulled into the spring, so the title doesn't slide around.
     content
-      .animation(Motion.tab) {
-        $0.opacity(shown ? 1 : 0).offset(x: shown ? 0 : dir * 28)
-      }
-      .onChange(of: tab) { _, t in
-        if t == index { shown = true }
-        else {
-          // Instant, unanimated exit （第十二轮）: no 0.5 s grace at
-          // partial opacity — that grace WAS the ghost.
-          var tr = Transaction(); tr.disablesAnimations = true
-          withTransaction(tr) { shown = false }
-        }
-      }
   }
 }
 extension View {
