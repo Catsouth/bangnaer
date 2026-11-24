@@ -712,6 +712,101 @@ IconStore 调用惯例处理）。烘焙图内存约 153×160×160×4B ≈ 16MB�
 可接受。若真机仍卡，下一招是 Metal/SpriteKit 级重写（脱离 Canvas
 逐帧绘制模型），本轮未做。
 
+### 第九轮（2026-11-24，构建号 1035 真机验收反馈，本地提交未推送）
+
+用户反馈：预合成后滑动「还是顿，不像现实转动球体一样」，并要求 UI
+参照 iOS 最新版本（iOS 26 液态玻璃）的所有样式与动态细节。本轮按
+优先级做：球引擎 > 球质感 > UI 对齐。
+
+**一、球面换 SpriteKit 引擎（SphereMap.swift）**
+
+- 新增 `SphereScene: SKScene` + `SphereSKView: UIViewRepresentable`
+  （不用 SpriteView，为的是 updateUIView 每次 SwiftUI 更新都能把
+  specs/focus/scheme 推给场景）。SKView 透明（allowsTransparency，
+  Glow 背景仍归 SwiftUI）、preferredFramesPerSecond = 120 随
+  ProMotion、scaleMode = .resizeFill。
+- 节点池按 account id 复用：每气泡一个面 SKSpriteNode（纹理 =
+  第八轮 SphereBaker 烘焙图）+ 一个标签 SKSpriteNode（纹理 = 明/暗
+  标签位图，configure 时按 scheme 选）；规格刷新时 reconcile——
+  新增建节点、消失移除、烘焙图实例变了才换纹理（UIImage 身份
+  比较），逐帧绝不新建节点/纹理。
+- 姿态状态全部移入场景（committed 四元数、spin、zoom、dragging）：
+  SwiftUI 手势只调 beginDrag/dragBy/endDrag/beginPinch/setZoom，
+  逐帧由 SKScene.update 算投影、写 (position, size, alpha,
+  zPosition)——拖动/自旋期间不再触发任何 SwiftUI 重渲染（旧
+  TimelineView + spin 结束轮询 task 一并删除，iconTick 重绘 hack
+  删除）。数学不变：四元数 trackball + SphereMath 投影逐字沿用，
+  场景坐标 y 向上，绘图时对投影 y 取负、中心点换算
+  (w/2, h/2 + 24)，手势增量与点选命中口径与 Canvas 时代一致
+  （tap 仍在 MapView，用 scene.currentOrientation()/currentZoom
+  读回姿态判定）。
+- 交互口径全保留：拖动 1:1、捏合（图标 min(1, zoom) 上限不变）、
+  点气泡进详情、点空白清聚焦、身份聚焦只显绑定气泡、组聚焦变暗
+  ×0.22、名称常显上限 48（r>=16、z>0.1、按 z 取最前）、背面气泡
+  直接缩小+降 alpha（不再画点）。连线改池化 SKShapeNode（每帧
+  重建路径，zPosition 在气泡之下，颜色/深度 alpha 口径不变）。
+  z 带划分：球体盘 -10 / 连线 z*0.5-2 / 气泡 z / 标签 z+2 / 光影 10。
+
+**二、真实球体质感**
+
+- 光影：一张 512px 预烘焙纹理的 SKSpriteNode 盖在球上（随 disc
+  半径缩放）：径向渐变 limb darkening（68% 半径内全透明 → 边缘
+  26% 黑）+ 左上高光斑（白 20% → 0，半径 42%），普通 alpha 混合
+  （SKBlendMode 无 softLight，alpha 渐变在明暗两模下都稳）。球体
+  本体盘改 SKShapeNode（label 色 4% 填充 + 7% 描边，随 scheme 经
+  configure 更新）。
+- 惯性物理：SphereSpin 衰减常数 1.8 → 1.7，典型甩动（ω≈2–4）
+  滑行约 2–3 秒、速度 <0.05 rad/s 时场景内直接收尾（不再轮询）；
+  拖动中姿态与手指 1:1（四元数增量沿用）。
+- 点选反馈：命中气泡做一次性弹性缩放（场景内按时间求值的脉冲
+  曲线，0.38s、峰值 +20%，与逐帧 size 相乘而非 SKAction，避免与
+  逐帧写 size 打架），配合既有 tapTick 轻震。
+- 静置自转：无手势/无聚焦/无 spin 且静置 >4 秒后，绕略倾斜轴
+  (0.30, 1, 0) 以 0.06 rad/s 自转（约 105 秒一圈）；任何拖动、
+  捏合、点选、聚焦变化都经 lastInteraction 重新计时，聚焦状态
+  永不自转。
+
+**三、UI 按 iOS 26 液态玻璃对齐（部署目标仍 iOS 17）**
+
+门控方式（Components.swift）：`GlassEffectSurface` 以
+`#if compiler(>=6.2)` 编译期门控 + `@available(iOS 26, *)` 双保险
+——CI 的 macos-15 runner 若还是旧 Xcode/SDK，玻璃分支根本不参与
+编译、全部回退；SDK 升上去后自动启用真 .glassEffect。运行期再以
+`#available(iOS 26, *)` 分流。回退一律是原有手作表面，视觉不变。
+
+- ① 底栏 + 搜索按钮（AtlasApp.glassFill）：底层换
+  `glassBarBase`——iOS 26 用真 .glassEffect，其余用原
+  ultraThinMaterial 0.72；上层 sheen 与高光边保留。玻璃拇指
+  （glassThumb）与手势口径不变。
+- ② 分段控件改玻璃面：关系图图例胶囊（SphereMap.legend）与卡包
+  KindSwitch 由 `.background(.glass)` 换 `.glassSurface(Capsule(),
+  interactive: true)`（26 上为可交互真玻璃，其余回退扁平 .glass
+  色调）；选中拇指的 matchedGeometry 滑动不变。
+- ③ 顶栏按钮：iOS 26 上工具栏由系统自动玻璃化，17 上保持原生
+  形态，未动 TopButtons 结构（强行自绘反而与系统口径冲突）。
+- ④ sheet：SheetHost 既有 presentationCornerRadius(34) 与系统
+  转场保留；弹窗内自定义玻璃片（Details/Forms 的 .glass 扁平
+  色调）未逐处替换——它们在滚动内容上，扁平色调是既定的性能
+  口径（见 GlassStyle 注释），本轮只动固定 chrome。
+- ⑤ 微交互统一：底栏页签、图例分段、KindSwitch 的图标统一加
+  `.symbolEffect(.bounce, value: 选中态)`（iOS 17 原生 API，无需
+  门控）；按压回弹沿用 PressStyle + Motion 弹簧组，未改。
+- 未动：列表/设置页结构、StatusBadge 等语义色徽章（状态色不可
+  玻璃化）、WalletCard 印刷卡面（设计即非玻璃）、SitesView 筛选
+  chips 的 accent 选中态。
+
+保持不变：数据、功能、WebDAV/Gist 同步、其余页面逻辑。
+
+残余风险：本地无 Xcode 未编译验证，待 CI 一轮确认。主要风险点：
+(1) SKView 承载 SwiftUI simultaneousGesture/onTapGesture 的衔接
+（SKView 本身不装手势识别器，理论上与 Canvas 时代一致，若真机
+手势被吞需改走场景 touches 或 representable 的 Coordinator);
+(2) glassEffect 分支在当前 CI SDK 下不参与编译，其正确性只能等
+SDK 升级后验证（签名按 iOS 26 官方 API 写：glassEffect(_:in:)、
+Glass.regular.interactive()）;(3) SpriteKit 与 SwiftUI 的线程
+模型——configure 在 updateUIView（主线程）调用、update 也在主
+线程，池操作无跨线程。
+
 ### 后续批次（待做）
 
 - 第三批：三维球形星系（替/补上游双列连线图）；登录方式标记显示 + 前往登录；

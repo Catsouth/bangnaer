@@ -204,9 +204,24 @@ struct RootView: View {
   // shade at the bottom edge), and the stroke is a specular rim: bright
   // where light catches the top edge, fading down the sides. Readability
   // comes from the material's own backdrop blur, not from opacity.
+  // 第九轮： on iOS 26 the base layer is the real system glass
+  // (.glassEffect, gated in Components.swift) and the hand-rolled sheen +
+  // specular rim stay on top as a whisper of extra light; pre-26 the
+  // stack below is unchanged.
+  @ViewBuilder func glassBarBase<S: InsettableShape>(_ shape: S) -> some View {
+    #if compiler(>=6.2)
+    if #available(iOS 26, *) {
+      GlassEffectSurface(shape: shape)
+    } else {
+      shape.fill(.ultraThinMaterial).opacity(0.72)
+    }
+    #else
+    shape.fill(.ultraThinMaterial).opacity(0.72)
+    #endif
+  }
   func glassFill<S: InsettableShape>(_ shape: S) -> some View {
     ZStack {
-      shape.fill(.ultraThinMaterial).opacity(0.72)
+      glassBarBase(shape)
       shape.fill(LinearGradient(stops: [
         .init(color: .white.opacity(0.20), location: 0),
         .init(color: .white.opacity(0.05), location: 0.45),
@@ -249,6 +264,7 @@ struct RootView: View {
     let on = tab == t
     return VStack(spacing: 3) {
       Image(systemName: icon).font(.system(size: 27, weight: .semibold))
+        .symbolEffect(.bounce, value: on)
       Text(name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
     }
     .foregroundStyle(on ? Color.accentColor : Color.primary)

@@ -1,13 +1,22 @@
 import SwiftUI
 import UIKit
+import SpriteKit
 
 // MARK: - sphere galaxy （绑哪儿第三批：关系图整页三维球形星系，替换上游双列连线图）
 //
-// The whole tab is one sphere: every account is a bubble on a Fibonacci sphere, drawn with a
-// single Canvas (150+ bubbles never become views). Since 第八轮 every bubble face and
-// label is a bitmap pre-rendered at spec time (SphereBaker), so a frame is just one
-// drawImage per bubble — the old per-frame clip + big-icon scale + Text layout was the
-// diagnosed drag hitch. Drag rotates (quaternion trackball
+// The whole tab is one sphere: every account is a bubble on a Fibonacci sphere.
+// Rounds 3–8 drew it with a single SwiftUI Canvas; 第九轮 moves the drawing to
+// a SpriteKit scene (SphereScene below): one SKSpriteNode per bubble whose
+// texture is the 第八轮 SphereBaker bitmap, so the GPU composites the ball and
+// the CPU only writes (position, size, alpha, z) per bubble per frame — Canvas
+// is CPU-rasterised and still hitched on device with 150+ bitmaps + labels
+// recomposited every frame. The maths is unchanged: quaternion trackball
+// orientation + perspective projection are still computed in Swift
+// (SphereMath), and the scene owns the orientation state, so a drag or a
+// spin no longer re-renders any SwiftUI at all. A baked shading sprite over
+// the ball (limb darkening + a top-left highlight) plus friction-tuned
+// inertia, a tap pulse and a slow idle rotation give it physical-ball feel.
+// Drag rotates (quaternion trackball
 // since 第六轮： no Euler angles, no pitch clamp, so the ball rolls 360° in every
 // direction), pinch zooms, back-side bubbles fade/shrink and can't
 // be tapped; a front bubble tap opens the account. Bubble rims are coloured by the group of
@@ -310,15 +319,17 @@ enum SphereMath {
 }
 
 /// Inertia after a flick （第六轮）: the ball keeps turning about the flick's
-/// fixed screen-space axis, the angular speed decaying exponentially (the
-/// same decay constant the Euler spin used), until commitSpin folds the
-/// final orientation back into the committed quaternion.
+/// fixed screen-space axis, the angular speed decaying exponentially until
+/// commitSpin folds the final orientation back into the committed quaternion.
+/// 第九轮 retunes the decay 1.8 → 1.7: a typical flick (ω ≈ 2–4 rad/s) now
+/// glides for ~2–3 s before the speed falls under the scene's 0.05 rad/s
+/// stop threshold — the friction tail of a real ball, not a brake.
 struct SphereSpin {
   var q0: Quat        // committed orientation when the flick started
   var axis: Vec3      // unit axis, screen space
   var omega: Double   // initial angular speed, rad/s
   var start: Date
-  static let decay = 1.8
+  static let decay = 1.7
   func orientation(at date: Date) -> Quat {
     let t = max(0, date.timeIntervalSince(start))
     let angle = omega * (1 - exp(-Self.decay * t)) / Self.decay
@@ -452,6 +463,341 @@ struct BubbleFace: View {
   }
 }
 
+// MARK: - SpriteKit sphere stage （第九轮）
+
+/// The GPU stage for the sphere. One SKSpriteNode per bubble (texture =
+/// the SphereBaker face bitmap) plus one per label, a pooled set of
+/// SKShapeNodes for the identity-focus threads, a faint body disc and a
+/// baked shading sprite on top (limb darkening + top-left highlight —
+/// the "real ball" read). The scene owns the orientation state (committed
+/// quaternion, friction spin, idle rotation), so gestures write straight
+/// into it and a frame of rotation touches no SwiftUI state at all;
+/// SwiftUI only pushes (specs, focus, scheme) through configure() when
+/// they change, and reads currentOrientation()/currentZoom back for tap
+/// hit-testing. Nodes and textures are pooled by account id: a spec
+/// refresh reconciles the pool (create / remove / re-texture only when
+/// the baked UIImage instance actually changed), never per frame.
+final class SphereScene: SKScene {
+  // pushed configuration (configure)
+  private var specs: [SphereBubble] = []
+  private var focus: SphereFocus? = nil
+  private var scheme: ColorScheme = .light
+  private var threadID: String? = nil
+  private var threadColor: Color = .gray
+  // orientation state — the single source of truth （第九轮）
+  private(set) var q = Quat.axisAngle(Vec3(x: 1, y: 0, z: 0), -0.3)
+    .times(Quat.axisAngle(Vec3(x: 0, y: 1, z: 0), 0.6)).normalized()
+  private var spin: SphereSpin? = nil
+  private(set) var currentZoom: CGFloat = 1
+  private var dragging = false
+  // frame bookkeeping
+  private var lastTime: TimeInterval = 0
+  private var lastInteraction: TimeInterval = 0
+  private var pulses: [String: TimeInterval] = [:]
+  // node pool
+  private var faceNodes: [String: SKSpriteNode] = [:]
+  private var labelNodes: [String: SKSpriteNode] = [:]
+  private var faceImage: [String: UIImage] = [:]
+  private var labelImage: [String: UIImage?] = [:]
+  private var threadNodes: [SKShapeNode] = []
+  private let discNode = SKShapeNode()
+  private let shadeNode = SKSpriteNode()
+  private var lastDiscR: CGFloat = -1
+
+  override init(size: CGSize) {
+    super.init(size: size)
+    backgroundColor = .clear
+    discNode.zPosition = -10
+    addChild(discNode)
+    shadeNode.texture = Self.makeShadingTexture()
+    shadeNode.zPosition = 10
+    addChild(shadeNode)
+  }
+  required init?(coder aDecoder: NSCoder) { fatalError("SphereScene is created in code only") }
+
+  // MARK: configuration
+
+  func configure(specs: [SphereBubble], focus: SphereFocus?, scheme: ColorScheme,
+                 threadID: String?, threadColor: Color) {
+    if focus != self.focus { lastInteraction = lastTime }   // a focus change is an interaction: idle rotation restarts its countdown
+    self.focus = focus
+    self.threadID = threadID
+    self.threadColor = threadColor
+    if scheme != self.scheme || specs.count != self.specs.count {
+      discNode.fillColor = UIColor.label.withAlphaComponent(0.04)
+      discNode.strokeColor = UIColor.label.withAlphaComponent(0.07)
+      discNode.lineWidth = 1
+    }
+    self.scheme = scheme
+    self.specs = specs
+    // reconcile the node pool with the spec set
+    let ids = Set(specs.map { $0.account.id })
+    for id in Array(faceNodes.keys) where !ids.contains(id) {
+      faceNodes[id]?.removeFromParent()
+      labelNodes[id]?.removeFromParent()
+      faceNodes[id] = nil; labelNodes[id] = nil
+      faceImage[id] = nil; labelImage[id] = nil
+    }
+    for b in specs {
+      let id = b.account.id
+      if faceNodes[id] == nil {
+        let face = SKSpriteNode(texture: SKTexture(image: b.baked))
+        let label = SKSpriteNode()
+        label.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        addChild(face)
+        addChild(label)
+        faceNodes[id] = face
+        labelNodes[id] = label
+        faceImage[id] = b.baked
+      } else if faceImage[id] !== b.baked {
+        faceNodes[id]?.texture = SKTexture(image: b.baked)
+        faceImage[id] = b.baked
+      }
+      let want: UIImage? = scheme == .dark ? b.labelDark : b.labelLight
+      let stored: UIImage? = labelImage[id] ?? nil
+      if stored !== want, let label = labelNodes[id] {
+        if let want {
+          let tex = SKTexture(image: want)
+          label.texture = tex
+          label.size = tex.size()
+        } else {
+          label.texture = nil
+        }
+        labelImage[id] = want
+      }
+    }
+  }
+
+  // MARK: gesture entry points (called from MapView's SwiftUI gestures)
+
+  func beginDrag() {
+    commitSpin()
+    dragging = true
+    lastInteraction = lastTime
+  }
+  /// UIKit-space drag deltas, exactly the convention the Canvas code used:
+  /// the axis is (dy, dx) because the projection works in y-up space.
+  func dragBy(dx: Double, dy: Double) {
+    let dq = Quat.axisAngle(Vec3(x: dy, y: dx, z: 0), hypot(dx, dy) * MapView.radPerPoint)
+    q = dq.times(q).normalized()
+    lastInteraction = lastTime
+  }
+  func endDrag(vx: Double, vy: Double) {
+    dragging = false
+    lastInteraction = lastTime
+    // Flick → inertia about a fixed axis, same component caps and start
+    // threshold the Canvas spin had; the friction tail lives in SphereSpin.
+    let wy = min(max(vx * MapView.radPerPoint, -9), 9)
+    let wx = min(max(vy * MapView.radPerPoint, -9), 9)
+    let omega = hypot(wx, wy)
+    if omega > 0.25 {
+      spin = SphereSpin(q0: q, axis: Vec3(x: wx / omega, y: wy / omega, z: 0), omega: omega, start: Date())
+    }
+  }
+  func beginPinch() { commitSpin(); lastInteraction = lastTime }
+  func setZoom(_ z: CGFloat) { currentZoom = z; lastInteraction = lastTime }
+  func noteInteraction() { lastInteraction = lastTime }
+  /// Tap feedback: the hit bubble pulses once (evaluated in layout, so
+  /// it composes with the per-frame size instead of fighting an SKAction).
+  func pulse(_ id: String) { pulses[id] = lastTime; lastInteraction = lastTime }
+  func currentOrientation() -> Quat { spin?.orientation(at: Date()) ?? q }
+  private func commitSpin() {
+    guard let s = spin else { return }
+    q = s.orientation(at: Date())
+    spin = nil
+  }
+
+  // MARK: per-frame layout
+
+  override func update(_ currentTime: TimeInterval) {
+    if lastTime == 0 {
+      lastTime = currentTime
+      lastInteraction = currentTime
+    }
+    let dt = min(currentTime - lastTime, 0.05)
+    lastTime = currentTime
+    // orientation: an active friction spin wins; otherwise, after ~4 s
+    // untouched and unfocused, the ball display-rotates very slowly
+    // about a tilted axis (0.06 rad/s ≈ a full turn in ~105 s) — any
+    // gesture or focus change re-arms the countdown via lastInteraction.
+    if let s = spin {
+      q = s.orientation(at: Date())
+      if s.speed(at: Date()) < 0.05 { spin = nil }
+    } else if !dragging, focus == nil, !specs.isEmpty, currentTime - lastInteraction > 4 {
+      let dq = Quat.axisAngle(Vec3(x: 0.30, y: 1, z: 0), 0.06 * dt)
+      q = dq.times(q).normalized()
+    }
+    layout(now: currentTime)
+  }
+
+  private func layout(now: TimeInterval) {
+    let size = self.size
+    guard size.width > 1, size.height > 1, !specs.isEmpty else {
+      discNode.isHidden = true
+      shadeNode.isHidden = true
+      return
+    }
+    // Scene space is y-up; the SwiftUI layout centre (w/2, h/2 − 24 in
+    // top-left space) is (w/2, h/2 + 24) here, and a projected point's
+    // y flips sign at plot time — all rotation maths stays untouched.
+    let center = CGPoint(x: size.width / 2, y: size.height / 2 + 24)
+    let R = Double(min(size.width, size.height)) * 0.40 * Double(currentZoom)
+    let iconScale = min(1.0, Double(currentZoom))   // pinch-in never blows icons past normal size (patch batch)
+
+    struct P {
+      let b: SphereBubble; let x: CGFloat; let y: CGFloat; let r: CGFloat
+      let z: Double; let alpha: CGFloat; let hidden: Bool
+    }
+    var ps: [P] = []
+    ps.reserveCapacity(specs.count)
+    for b in specs {
+      let p = SphereMath.project(b.dir, q: q, radius: R)
+      let t = (p.z + 1) / 2
+      let r = b.baseR * CGFloat(p.scale) * CGFloat(0.7 + 0.3 * t) * CGFloat(iconScale)
+      var alpha = 0.10 + 0.90 * pow(t, 1.4)
+      var hidden = false
+      switch focus {
+      case .identity(let fid):
+        // Identity focus （第五轮）: only the bound bubbles exist at all.
+        hidden = !b.account.identityIds.contains(fid)
+      case .group(let g):
+        if b.group != g { alpha *= 0.22 }
+      case nil:
+        break
+      }
+      ps.append(P(b: b, x: center.x + CGFloat(p.x), y: center.y - CGFloat(p.y),
+                  r: r, z: p.z, alpha: CGFloat(alpha), hidden: hidden))
+    }
+    // Label budget （第七轮）: labels are always on, capped at the
+    // front-most 48 bubbles past the usual gate (r >= 16, z > 0.1).
+    var labelIDs = Set<String>()
+    var budget = 48
+    for p in ps.sorted(by: { $0.z > $1.z }) where !p.hidden && p.r >= 16 && p.z > 0.1 {
+      if budget == 0 { break }
+      labelIDs.insert(p.b.account.id)
+      budget -= 1
+    }
+    // body disc + shading follow the ball's current radius
+    let discR = CGFloat(R) * 1.05
+    discNode.isHidden = false
+    shadeNode.isHidden = false
+    if abs(discR - lastDiscR) > 0.5 {
+      lastDiscR = discR
+      discNode.path = CGPath(ellipseIn: CGRect(x: -discR, y: -discR, width: discR * 2, height: discR * 2), transform: nil)
+      shadeNode.size = CGSize(width: discR * 2, height: discR * 2)
+    }
+    discNode.position = center
+    shadeNode.position = center
+    // focus threads （第三轮细化）: centre → each bound bubble, in the
+    // identity's colour, depth-faded like the bubbles, under them.
+    let threaded = threadID.map { tid in ps.filter { !$0.hidden && $0.b.account.identityIds.contains(tid) } } ?? []
+    while threadNodes.count < threaded.count {
+      let n = SKShapeNode()
+      n.lineWidth = 1
+      n.fillColor = .clear
+      addChild(n)
+      threadNodes.append(n)
+    }
+    for (i, node) in threadNodes.enumerated() {
+      guard i < threaded.count else { node.isHidden = true; continue }
+      let p = threaded[i]
+      node.isHidden = false
+      let path = CGMutablePath()
+      path.move(to: center)
+      path.addLine(to: CGPoint(x: p.x, y: p.y))
+      node.path = path
+      node.strokeColor = UIColor(threadColor).withAlphaComponent(p.alpha * 0.55)
+      node.zPosition = CGFloat(p.z) * 0.5 - 2
+    }
+    // bubbles + labels
+    for p in ps {
+      let id = p.b.account.id
+      guard let face = faceNodes[id], let label = labelNodes[id] else { continue }
+      if p.hidden {
+        face.isHidden = true
+        label.isHidden = true
+        continue
+      }
+      face.isHidden = false
+      var d = p.r * 2
+      if let t0 = pulses[id] {
+        let t = now - t0
+        if t >= 0.38 { pulses[id] = nil } else { d *= 1 + 0.20 * CGFloat(sin(.pi * t / 0.38)) }
+      }
+      face.position = CGPoint(x: p.x, y: p.y)
+      face.size = CGSize(width: d, height: d)
+      face.alpha = p.alpha
+      face.zPosition = CGFloat(p.z)
+      if labelIDs.contains(id), label.texture != nil {
+        label.isHidden = false
+        label.position = CGPoint(x: p.x, y: p.y - p.r - 8)
+        label.alpha = p.alpha
+        label.zPosition = CGFloat(p.z) + 2
+      } else {
+        label.isHidden = true
+      }
+    }
+  }
+
+  /// The ball's shading, baked once at 512px and scaled to the disc:
+  /// limb darkening (edges sink to 26% black) for the spherical read,
+  /// plus a soft white highlight toward the top-left. Alpha-blended over
+  /// the bubbles; the corners stay transparent, so only the disc shades.
+  private static func makeShadingTexture() -> SKTexture {
+    let side: CGFloat = 512
+    let fmt = UIGraphicsImageRendererFormat()
+    fmt.scale = 1
+    fmt.opaque = false
+    let img = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { ctx in
+      let cg = ctx.cgContext
+      let space = CGColorSpaceCreateDeviceRGB()
+      let center = CGPoint(x: side / 2, y: side / 2)
+      let limb = [UIColor.black.withAlphaComponent(0).cgColor,
+                  UIColor.black.withAlphaComponent(0).cgColor,
+                  UIColor.black.withAlphaComponent(0.26).cgColor] as CFArray
+      if let g = CGGradient(colorsSpace: space, colors: limb, locations: [0, 0.68, 1]) {
+        cg.drawRadialGradient(g, startCenter: center, startRadius: 0,
+                              endCenter: center, endRadius: side / 2, options: [])
+      }
+      // image space is y-down: (0.36, 0.30) of the side is the upper-left
+      let hc = CGPoint(x: side * 0.36, y: side * 0.30)
+      let glow = [UIColor.white.withAlphaComponent(0.20).cgColor,
+                  UIColor.white.withAlphaComponent(0).cgColor] as CFArray
+      if let g = CGGradient(colorsSpace: space, colors: glow, locations: [0, 1]) {
+        cg.drawRadialGradient(g, startCenter: hc, startRadius: 0,
+                              endCenter: hc, endRadius: side * 0.42, options: [])
+      }
+    }
+    return SKTexture(image: img)
+  }
+}
+
+/// SwiftUI host for the sphere's SKView. A representable (not SpriteView)
+/// so configure() lands on every SwiftUI update — specs / focus / scheme
+/// changes reach the scene without the scene observing the store itself.
+/// The view is transparent: the Glow backdrop stays SwiftUI's.
+struct SphereSKView: UIViewRepresentable {
+  let scene: SphereScene
+  let specs: [SphereBubble]
+  let focus: SphereFocus?
+  let scheme: ColorScheme
+  let threadID: String?
+  let threadColor: Color
+
+  func makeUIView(context: Context) -> SKView {
+    let v = SKView()
+    v.allowsTransparency = true
+    v.backgroundColor = .clear
+    v.preferredFramesPerSecond = 120   // ProMotion where the hardware has it; clamped elsewhere
+    scene.scaleMode = .resizeFill
+    v.presentScene(scene)
+    return v
+  }
+  func updateUIView(_ v: SKView, context: Context) {
+    scene.configure(specs: specs, focus: focus, scheme: scheme, threadID: threadID, threadColor: threadColor)
+  }
+}
+
 struct MapView: View {
   @Environment(Store.self) var store
   @Environment(\.colorScheme) private var colorScheme
@@ -459,18 +805,16 @@ struct MapView: View {
   // land, the baker bumps its revision and the specs refresh (below),
   // re-baking those bubbles with their real icons.
   @ObservedObject private var baker = SphereBaker.shared
-  // committed orientation / zoom （第六轮）: one unit quaternion instead of
-  // yaw/pitch — the initial value reproduces the old yaw 0.6 then pitch -0.3
-  // tilt (Rx(-0.3) ∘ Ry(0.6)) so the ball opens at the same angle as before.
-  @State private var q = Quat.axisAngle(Vec3(x: 1, y: 0, z: 0), -0.3)
-    .times(Quat.axisAngle(Vec3(x: 0, y: 1, z: 0), 0.6)).normalized()
-  @State private var zoom: CGFloat = 1
+  // The SpriteKit stage （第九轮）: orientation, spin, zoom and idle
+  // rotation all live in the scene now, so SwiftUI keeps only the
+  // gesture sampling bookkeeping (velocity needs the gesture's own
+  // timestamps) and the interaction state (focus, sheets, haptics).
+  @State private var scene = SphereScene(size: CGSize(width: 320, height: 320))
   // gesture bookkeeping
-  @State private var dragActive = false
+  @State private var dragStarted = false
   @State private var dragLast: (date: Date, t: CGSize)? = nil
   @State private var dragVel: CGSize = .zero
   @State private var pinchBase: CGFloat? = nil
-  @State private var spin: SphereSpin? = nil
   // Bubble specs are computed once and cached （第六轮）: body re-evaluates on
   // every drag frame, and rebuilding 150+ specs (plus groupCounts re-deriving
   // them) each time was a standing per-frame cost. The cache refreshes when
@@ -483,7 +827,6 @@ struct MapView: View {
   @State private var pendingAdd: String? = nil
   @State private var tapTick = 0
   @State private var pressTick = 0
-  @State private var iconTick = 0
   @Namespace private var segNS
 
   static let radPerPoint = 0.0055
@@ -541,7 +884,7 @@ struct MapView: View {
           } else {
             // Gestures live on the sphere itself, NOT on the whole tab (patch batch):
             // the legend chips keep their own tap / long-press and never fight the
-            // canvas for recognition — that fight was the long-press flicker.
+            // stage for recognition — that fight was the long-press flicker.
             sphere(in: geo.size)
               .contentShape(Rectangle())
               .simultaneousGesture(dragGesture)
@@ -561,13 +904,7 @@ struct MapView: View {
       .sensoryFeedback(.selection, trigger: tapTick)
       .sensoryFeedback(.impact(weight: .light), trigger: pressTick)
     }
-    .onAppear { refreshBubbles(); iconTick &+= 1 }
-    .task {
-      // icons keep landing for a moment after the tab opens (favicons); one delayed
-      // repaint picks them up — during a spin the canvas repaints anyway
-      try? await Task.sleep(for: .seconds(1.2))
-      iconTick &+= 1
-    }
+    .onAppear { refreshBubbles() }
     .onChange(of: store.demoFocus) { _, f in
       withAnimation(Motion.smooth) { focus = (f == nil || f == "none") ? nil : .identity(f!) }
     }
@@ -598,136 +935,22 @@ struct MapView: View {
     }
   }
 
-  // MARK: canvas
+  // MARK: stage
 
-  @ViewBuilder func sphere(in size: CGSize) -> some View {
-    let specs = bubbles
-    if let spin {
-      // Frame-rate cap （第八轮）: 60 fps halves the per-second redraw
-      // count on 120 Hz screens and doubles the frame budget; drag and
-      // inertia are gesture/event driven, so their feel is unchanged.
-      TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
-        canvas(specs: specs, size: size, q: spin.orientation(at: ctx.date), scheme: colorScheme)
-      }
-      .task(id: spin.start) {
-        // the ViewBuilder above can't run side effects, so spin-end detection
-        // lives here: poll the captured spin's decay, then fold it into q
-        let mine = spin
-        while !Task.isCancelled {
-          if mine.speed(at: Date()) < 0.06 {
-            if self.spin?.start == mine.start { commitSpin() }
-            return
-          }
-          try? await Task.sleep(for: .milliseconds(60))
-        }
-      }
-    } else {
-      // Labels are always drawn （第七轮）: 第六轮's motion load-shed
-      // (names appear only at rest) made the whole set pop in the moment
-      // the ball stopped — one visible hitch. Labels now stay on, and
-      // the stop-frame cost is bounded inside the canvas instead
-      // (precomputed label strings + a per-frame cap).
-      canvas(specs: specs, size: size, q: q, scheme: colorScheme)
-    }
+  /// The focused identity, when the focus is one （第三轮细化 threads):
+  /// its id and colour are pushed to the scene with the specs.
+  var focusIdentity: Identity? {
+    if case .identity(let fid) = focus { return store.identity(fid) }
+    return nil
   }
 
-  func canvas(specs: [SphereBubble], size: CGSize, q: Quat, scheme: ColorScheme) -> some View {
-    let _ = iconTick
-    return Canvas { ctx, _ in
-      let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
-      let R = Double(min(size.width, size.height)) * 0.40 * Double(zoom)
-      // faint sphere body so the ball reads as one object
-      let disc = CGRect(x: center.x - CGFloat(R) * 1.05, y: center.y - CGFloat(R) * 1.05, width: CGFloat(R) * 2.1, height: CGFloat(R) * 2.1)
-      ctx.fill(Path(ellipseIn: disc), with: .color(.primary.opacity(0.04)))
-      ctx.stroke(Path(ellipseIn: disc), with: .color(.primary.opacity(0.07)), lineWidth: 1)
-
-      struct P { let b: SphereBubble; let c: CGPoint; let r: CGFloat; let z: Double }
-      // Pinch out shrinks the icons with the ball; pinch in never blows them past
-      // their normal size — positions still project with the real zoom (patch batch).
-      let iconScale = min(1.0, Double(zoom))
-      var ps: [P] = specs.map { b in
-        let p = SphereMath.project(b.dir, q: q, radius: R)
-        let t = (p.z + 1) / 2
-        let r = b.baseR * CGFloat(p.scale) * CGFloat(0.7 + 0.3 * t) * CGFloat(iconScale)
-        return P(b: b, c: CGPoint(x: center.x + CGFloat(p.x), y: center.y + CGFloat(p.y)), r: r, z: p.z)
-      }
-      ps.sort { $0.z < $1.z }   // back bubbles first
-      // Identity focus （第五轮）: only the bubbles bound to the focused
-      // identity exist at all — the rest are not drawn (and tap() hit-tests
-      // the same filtered set), so the ball shows exactly that identity's
-      // services, threads included. Group focus keeps the dim-everything-else
-      // treatment below; tapping empty sphere clears the focus either way.
-      if let f = focus, case .identity(let fid) = f {
-        ps = ps.filter { $0.b.account.identityIds.contains(fid) }
-      }
-      // Label budget （第七轮）: labels are always on now, so the frame
-      // cost is capped instead — past the usual gate (r >= 16, front
-      // hemisphere), only the front-most 48 bubbles get a label. ps is
-      // sorted back-to-front, so the budget is spent scanning from the
-      // front (the end of the array) backwards.
-      var labelIndices = Set<Int>()
-      var labelBudget = 48
-      for idx in ps.indices.reversed() where ps[idx].r >= 16 && ps[idx].z > 0.1 {
-        if labelBudget == 0 { break }
-        labelIndices.insert(idx)
-        labelBudget -= 1
-      }
-      // Focus threads （第三轮细化）: an identity focus connects the centre to
-      // every bubble bound to that identity, in the identity's own colour,
-      // under the bubbles (drawn first, and the canvas never hit-tests anyway).
-      // Alpha follows the same depth curve as the bubbles, so back-side
-      // threads fade out with their bubbles. Group focus draws none — a whole
-      // group threaded at once would be a thicket, not a highlight.
-      if let f = focus, case .identity(let fid) = f, let who = store.identity(fid) {
-        let thread = Color(hex: who.color)
-        for item in ps where item.b.account.identityIds.contains(fid) {
-          let t = (item.z + 1) / 2
-          let a = (0.10 + 0.90 * pow(t, 1.4)) * 0.55
-          var path = Path()
-          path.move(to: center)
-          path.addLine(to: item.c)
-          ctx.stroke(path, with: .color(thread.opacity(a)), lineWidth: 1)
-        }
-      }
-      for (idx, item) in ps.enumerated() {
-        let t = (item.z + 1) / 2
-        var alpha = 0.10 + 0.90 * pow(t, 1.4)
-        let dimmed: Bool = switch focus {
-        case .identity: false   // unbound bubbles were filtered out above
-        case .group(let g): item.b.group != g
-        case nil: false
-        }
-        if dimmed { alpha *= 0.22 }
-        let rect = CGRect(x: item.c.x - item.r, y: item.c.y - item.r, width: item.r * 2, height: item.r * 2)
-        // Back-face culling （第八轮）: a bubble projecting under 4pt is
-        // a speck — draw it as a plain group-colour dot, no bitmap, no
-        // label. Hit-testing is unaffected: tap() projects from the
-        // specs, never from what was drawn.
-        if item.r < 4 {
-          ctx.fill(Path(ellipseIn: rect), with: .color(item.b.group.color.opacity(alpha)))
-          continue
-        }
-        // Body （第八轮）: one drawImage of the spec's pre-baked face —
-        // icon clip, favicon backing, letter tile and rim were all
-        // baked in at spec time, and the source bitmap is already
-        // small, so the GPU-side scale is the only per-frame cost.
-        // The frame's depth / focus alpha rides on the context, which
-        // also unifies the old asymmetry (icon bodies used to stay
-        // opaque on the back face while their rims faded).
-        var bc = ctx
-        bc.opacity = alpha
-        bc.draw(Image(uiImage: item.b.baked), in: rect)
-        // name under the bigger front bubbles — always drawn （第七轮）,
-        // within the frame's label budget; the bitmap was typeset at
-        // spec time （第八轮）, so this is again a draw, not a layout
-        if labelIndices.contains(idx), let label = scheme == .dark ? item.b.labelDark : item.b.labelLight {
-          var lc = ctx
-          lc.opacity = alpha
-          lc.draw(Image(uiImage: label), at: CGPoint(x: item.c.x, y: item.c.y + item.r + 8), anchor: .center)
-        }
-      }
-    }
-    .frame(width: size.width, height: size.height)
+  /// The sphere itself is the SpriteKit stage now （第九轮）: SwiftUI
+  /// hands it the specs / focus / scheme and keeps the gestures — the
+  /// scene owns orientation, spin, zoom and the per-frame layout.
+  func sphere(in size: CGSize) -> some View {
+    SphereSKView(scene: scene, specs: bubbles, focus: focus, scheme: colorScheme,
+                 threadID: focusIdentity?.id, threadColor: focusIdentity.map { Color(hex: $0.color) } ?? .gray)
+      .frame(width: size.width, height: size.height)
   }
 
   // MARK: gestures
@@ -735,9 +958,9 @@ struct MapView: View {
   var dragGesture: some Gesture {
     DragGesture(minimumDistance: 4)
       .onChanged { v in
-        if !dragActive {
-          commitSpin()
-          dragActive = true
+        if !dragStarted {
+          scene.beginDrag()
+          dragStarted = true
           // The drag only starts past its minimum distance; swallowing that
           // first sample (no rotation, just the baseline) keeps the ball
           // from jumping when rotation kicks in (patch batch).
@@ -749,15 +972,11 @@ struct MapView: View {
         let dx = Double(v.translation.width - last.t.width)
         let dy = Double(v.translation.height - last.t.height)
         if dx != 0 || dy != 0 {
-          // Trackball increment （第六轮）: rotate about the screen-space
-          // axis perpendicular to this step's drag direction — (dy, dx)
-          // because project() works in y-up space: a rightward step turns
-          // about +Y, a downward step about +X, a diagonal step about the
-          // blend, so the front of the ball follows the finger exactly.
-          // Pre-multiplying (screen-space axis) onto the committed q is
-          // what makes the roll unlimited: no angle is ever clamped.
-          let dq = Quat.axisAngle(Vec3(x: dy, y: dx, z: 0), hypot(dx, dy) * Self.radPerPoint)
-          q = dq.times(q).normalized()
+          // Trackball increment （第六轮）: the scene rotates about the
+          // screen-space axis perpendicular to this step's drag direction,
+          // so the front of the ball follows the finger 1:1 and the roll
+          // is unlimited — see SphereScene.dragBy.
+          scene.dragBy(dx: dx, dy: dy)
         }
         let dt = v.time.timeIntervalSince(last.date)
         if dt > 0.016 {
@@ -767,27 +986,20 @@ struct MapView: View {
         dragLast = (v.time, v.translation)
       }
       .onEnded { _ in
-        dragActive = false
+        dragStarted = false
         dragLast = nil
-        // Flick → inertia about a fixed axis: the horizontal rate turns
-        // about Y, the vertical rate about X (same component caps and
-        // start threshold the Euler spin had).
-        let wy = min(max(Double(dragVel.width) * Self.radPerPoint, -9), 9)
-        let wx = min(max(Double(dragVel.height) * Self.radPerPoint, -9), 9)
-        let omega = hypot(wx, wy)
-        if omega > 0.25 {
-          // no haptic on spin start （第五轮）: sliding the ball stays silent;
-          // pressTick now belongs only to the segment long-press.
-          spin = SphereSpin(q0: q, axis: Vec3(x: wx / omega, y: wy / omega, z: 0), omega: omega, start: Date())
-        }
+        // Flick → the scene's friction spin (no haptic on spin start
+        // （第五轮）: sliding the ball stays silent; pressTick belongs
+        // only to the segment long-press).
+        scene.endDrag(vx: Double(dragVel.width), vy: Double(dragVel.height))
       }
   }
 
   var pinchGesture: some Gesture {
     MagnificationGesture()
       .onChanged { s in
-        if pinchBase == nil { commitSpin(); pinchBase = zoom }
-        zoom = min(2.4, max(0.55, (pinchBase ?? 1) * s))
+        if pinchBase == nil { scene.beginPinch(); pinchBase = scene.currentZoom }
+        scene.setZoom(min(2.4, max(0.55, (pinchBase ?? 1) * s)))
       }
       .onEnded { _ in
         pinchBase = nil
@@ -795,9 +1007,10 @@ struct MapView: View {
   }
 
   func tap(at loc: CGPoint, in size: CGSize) {
-    // hit-testing projects through the very same quaternion the canvas is
+    // hit-testing projects through the very same quaternion the scene is
     // showing (the live spin orientation while a flick is still decaying)
-    let qNow = spin?.orientation(at: Date()) ?? q
+    let qNow = scene.currentOrientation()
+    let zoom = scene.currentZoom
     let center = CGPoint(x: size.width / 2, y: size.height / 2 - 24)
     let R = Double(min(size.width, size.height)) * 0.40 * Double(zoom)
     var best: (id: String, z: Double)? = nil
@@ -807,25 +1020,21 @@ struct MapView: View {
       let p = SphereMath.project(b.dir, q: qNow, radius: R)
       guard p.z > -0.05 else { continue }   // back side can't be tapped
       let t = (p.z + 1) / 2
-      // same radius the canvas draws with (incl. the min(1, zoom) icon cap), + slack
+      // same radius the scene draws with (incl. the min(1, zoom) icon cap), + slack
       let r = Double(b.baseR) * p.scale * (0.7 + 0.3 * t) * min(1.0, Double(zoom)) + 6
       let d = hypot(Double(loc.x - center.x) - p.x, Double(loc.y - center.y) - p.y)
       if d <= r && (best == nil || p.z > best!.z) { best = (b.account.id, p.z) }
     }
     if let best {
+      scene.pulse(best.id)   // elastic pop on the hit bubble （第九轮）, under the route change
       tapTick &+= 1
       store.route = .account(best.id)
     } else if focus != nil {
       // tapping empty sphere clears a chip / demo focus (patch batch)
       withAnimation(Motion.smooth) { focus = nil }
+      scene.noteInteraction()
       tapTick &+= 1
     }
-  }
-
-  func commitSpin() {
-    guard let s = spin else { return }
-    q = s.orientation(at: Date())
-    spin = nil
   }
 
   // MARK: legend
@@ -851,7 +1060,7 @@ struct MapView: View {
         ForEach(visibleGroups, id: \.rawValue) { g in segment(g) }
       }
       .padding(3)
-      .background(.glass, in: Capsule())
+      .glassSurface(Capsule(), interactive: true)
       .animation(Motion.smooth, value: focus)
       Text("拖动旋转 · 捏合缩放 · 长按分段查看身份").font(.system(size: 11)).foregroundStyle(.secondary)
         .padding(.leading, 6)
@@ -870,6 +1079,7 @@ struct MapView: View {
     let on = focus == .group(g)
     return HStack(spacing: 5) {
       Image(systemName: groupIcon(g)).font(.system(size: 13, weight: .semibold))
+        .symbolEffect(.bounce, value: on)
       Text(g.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
       Text("\(groupCounts[g] ?? 0)").font(.system(size: 12, weight: .medium)).foregroundStyle(on ? .primary : .secondary)
     }

@@ -133,6 +133,7 @@ struct KindSwitch: View {
         } label: {
           HStack(spacing: 6) {
             Image(systemName: icon).font(.system(size: 14, weight: .semibold))
+              .symbolEffect(.bounce, value: on)
             Text(name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
             Text("\(k == "phone" ? store.index.phones.count : k == "login" ? store.index.logins.count : store.index.emails.count)").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
           }
@@ -147,7 +148,7 @@ struct KindSwitch: View {
       }
     }
     .padding(3)
-    .background(.glass, in: Capsule())
+    .glassSurface(Capsule(), interactive: true)
     .sensoryFeedback(.selection, trigger: store.kind)
   }
 }

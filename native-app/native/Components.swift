@@ -74,6 +74,49 @@ struct GlassStyle: ShapeStyle {
 }
 extension ShapeStyle where Self == GlassStyle { static var glass: GlassStyle { GlassStyle() } }
 
+// MARK: - liquid glass （第九轮： UI 对齐 iOS 26）
+
+/// The real iOS 26 glass surface. The deployment target stays iOS 17, so
+/// this type is availability-gated twice over: the runtime check keeps it
+/// off pre-26 systems, and the compiler gate keeps the file buildable
+/// with an SDK that predates the glass APIs (the CI runner's Xcode) —
+/// with an older SDK the gated branch simply doesn't exist and every
+/// call site falls back to the hand-rolled surfaces below.
+#if compiler(>=6.2)
+@available(iOS 26, *)
+struct GlassEffectSurface<S: Shape>: View {
+  let shape: S
+  var interactive: Bool = false
+  var body: some View {
+    shape.fill(.clear)
+      .glassEffect(interactive ? Glass.regular.interactive() : Glass.regular, in: shape)
+  }
+}
+#endif
+
+/// A background surface in the current system's glass style: real
+/// .glassEffect on iOS 26, the flat .glass tint everywhere else.
+@ViewBuilder func glassCompatSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
+  #if compiler(>=6.2)
+  if #available(iOS 26, *) {
+    GlassEffectSurface(shape: shape, interactive: interactive)
+  } else {
+    shape.fill(.glass)
+  }
+  #else
+  shape.fill(.glass)
+  #endif
+}
+
+extension View {
+  /// `glassSurface(shape)` = background(glassCompatSurface(shape)):
+  /// segmented controls, capsules and chips that used to fill with the
+  /// flat .glass tint get the system liquid glass on iOS 26 for free.
+  func glassSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
+    background { glassCompatSurface(shape, interactive: interactive) }
+  }
+}
+
 // MARK: - baked shadows
 
 /// Coloured soft shadows rendered once into a bitmap (Core Graphics, off the frame loop) and then
