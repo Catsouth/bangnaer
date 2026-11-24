@@ -650,6 +650,32 @@ extension View {
 /// (trash, into the recycle bin) — with accessibility labels instead of visible text;
 /// long-press gives the same actions with text via AccountMenu. Tapping the row still
 /// opens the detail (or closes the strip when it's open).
+///
+/// 第十二轮 — long-press ghosting fix. On device, long-pressing a row
+/// doubled it: the row's content printed a second, shifted copy over
+/// the next row, the swipe strip bled through as the menu dismissed,
+/// and the menu itself just spilled downward over the rows below
+/// instead of lifting the row with the standard blurred-backdrop
+/// presentation. Root cause (verified in this layout): .contextMenu
+/// was attached to the sliding Button itself, whose label carried
+/// PressStyle — an *animated* scaleEffect driven by isPressed. A
+/// long press holds isPressed true; the moment the context-menu
+/// interaction takes over the touch, isPressed flips false and the
+/// label springs back to scale 1.0 *while the system is snapshotting
+/// the very same view for the preview lift* — snapshot and live view
+/// diverge, the lift fails, and the menu degrades to appearing in
+/// place (downward, over the rows below) with the diverging copies
+/// visible as the ghost. The moving .offset target and the strip
+/// sibling outside the lifted unit made the dismiss-time bleed
+/// worse. Fix: the context menu now targets the whole row unit —
+/// the clipped ZStack, strip included (the strip sits behind the
+/// row's opaque base, so the preview is exactly the row as seen) —
+/// and the row's Button drops the animated press scale (.plain):
+/// nothing in the lifted unit animates a transform on press state
+/// anymore, so the system snapshot is of a static view and the
+/// standard lift / blur / system-placed menu comes back. Tap still
+/// opens the detail; the row trades its press-scale feedback for a
+/// clean long press (the revealed-state haptic stays).
 struct AccountRow: View {
   @Environment(Store.self) var store
   @Environment(\.openURL) var openURL
@@ -681,11 +707,17 @@ struct AccountRow: View {
           // strip from bleeding through it while the row is closed
           .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(UIColor.systemBackground)))
       }
-      .buttonStyle(PressStyle(scale: 0.98))
+      // No PressStyle here （第十二轮）: its animated press scale is what
+      // fought the context-menu snapshot (see the type comment above).
+      .buttonStyle(.plain)
       .offset(x: offset)
-      .contextMenu { AccountMenu(account: account) }
     }
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    // The menu hangs on the whole clipped row unit, not on the sliding
+    // Button inside it （第十二轮）: the lifted preview is the row
+    // exactly as seen, strip hidden behind the opaque base.
+    .contextMenu { AccountMenu(account: account) }
     .simultaneousGesture(swipeGesture)
     .sensoryFeedback(.impact(weight: .light), trigger: revealed)
   }

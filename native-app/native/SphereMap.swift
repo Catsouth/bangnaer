@@ -777,6 +777,24 @@ final class SphereScene: SKScene {
   /// A release whose last-~100 ms of real motion stays under this
   /// angular speed (rad/s) starts no spin （第十一轮）.
   static let spinStartThreshold = 0.3
+  // Zoom spring （第十二轮）: 1.0 is the ball's home size. A pinch
+  // may shrink the ball without limit while the fingers are down
+  // (setZoom's floor is a stateless numeric guard, not a gesture
+  // stop), but the ball may not REST below home: endPinch starts
+  // this spring whenever the release lands at or near home
+  // (≤ zoomSnapThreshold — the magnetic zone a pinch-back from an
+  // enlarged rest also falls into), and the spring is an analytic
+  // damped oscillator (underdamped, ζ ≈ 0.68 → a ~5% overshoot
+  // before it settles), evaluated from wall-clock time like the
+  // spin's speed, so the interaction report stays honest even if
+  // the scene is unpresented mid-spring. Resting zoomed-in (up to
+  // the 2.4 display cap) is untouched: a release above the snap
+  // threshold simply commits.
+  private var zoomSpring: (z0: CGFloat, start: Date)? = nil
+  static let zoomSnapThreshold: CGFloat = 1.15
+  static let zoomSpringOmega: CGFloat = 9.5
+  static let zoomSpringZeta: CGFloat = 0.68
+  static let zoomSpringDuration: TimeInterval = 1.1
   // Interaction reporting for the bake pipeline （第十轮）: the baker
   // pauses its queue and the view defers spec refreshes while this is
   // true, so no ImageRenderer work or texture upload ever lands in
@@ -785,7 +803,9 @@ final class SphereScene: SKScene {
   var onBusyChange: ((Bool) -> Void)? = nil
   private var lastBusy = false
   var isInteracting: Bool {
-    dragging || pinching || touchHeld || (spin.map { $0.speed(at: Date()) >= 0.05 } ?? false)
+    dragging || pinching || touchHeld
+      || (spin.map { $0.speed(at: Date()) >= 0.05 } ?? false)
+      || (zoomSpring.map { Date().timeIntervalSince($0.start) < Self.zoomSpringDuration } ?? false)
   }
   private func reportBusy() {
     let b = isInteracting
@@ -944,9 +964,46 @@ final class SphereScene: SKScene {
     }
     reportBusy()
   }
-  func beginPinch() { commitSpin(); pinching = true; lastInteraction = lastTime; reportBusy() }
-  func endPinch() { pinching = false; lastInteraction = lastTime; reportBusy() }
-  func setZoom(_ z: CGFloat) { currentZoom = z; lastInteraction = lastTime }
+  func beginPinch() { commitSpin(); zoomSpring = nil; pinching = true; lastInteraction = lastTime; reportBusy() }
+  func endPinch() {
+    pinching = false
+    lastInteraction = lastTime
+    // Spring home （第十二轮）: released at or near the home size —
+    // shrunk under it, or pinched back down into its magnetic zone
+    // from an enlarged rest — the ball springs back to exactly 1.0
+    // with a slight elastic overshoot instead of stopping dead or
+    // drifting past. Released clearly enlarged, the zoom commits
+    // and stays for inspection.
+    if currentZoom <= Self.zoomSnapThreshold, abs(currentZoom - 1) > 0.001 {
+      zoomSpring = (z0: currentZoom, start: Date())
+    }
+    reportBusy()
+  }
+  func setZoom(_ z: CGFloat) {
+    // A live pinch owns the zoom: any in-flight spring is cancelled.
+    // The guards are stateless display limits, recomputed from the
+    // gesture's base every event — the 0.05 floor keeps the
+    // projection sane at the bottom of an unlimited shrink without
+    // ever sticking (spread the fingers again and the value walks
+    // straight back up through it). The 2.4 cap is the pre-第十二轮
+    // zoom-in range, unchanged.
+    zoomSpring = nil
+    currentZoom = min(2.4, max(0.05, z))
+    lastInteraction = lastTime
+  }
+  /// The spring's value at a wall-clock instant: the closed form of
+  /// the underdamped oscillator released from z0 at rest. Nil once
+  /// the spring's lifetime is over (the caller then snaps to 1.0).
+  private func springZoom(at date: Date) -> CGFloat? {
+    guard let s = zoomSpring else { return nil }
+    let t = CGFloat(date.timeIntervalSince(s.start))
+    guard t < CGFloat(Self.zoomSpringDuration) else { return nil }
+    let w = Self.zoomSpringOmega, zeta = Self.zoomSpringZeta
+    let wd = w * sqrt(1 - zeta * zeta)
+    let a = s.z0 - 1
+    let b = zeta * w * a / wd   // released from rest: v(0) = 0
+    return 1 + exp(-zeta * w * t) * (a * cos(wd * t) + b * sin(wd * t))
+  }
   func noteInteraction() { lastInteraction = lastTime }
   /// Tap feedback: the hit bubble pulses once (evaluated in layout, so
   /// it composes with the per-frame size instead of fighting an SKAction).
@@ -978,6 +1035,14 @@ final class SphereScene: SKScene {
     } else if !dragging, !touchHeld, focus == nil, !specs.isEmpty, currentTime - lastInteraction > 4 {
       let dq = Quat.axisAngle(Vec3(x: 0.30, y: 1, z: 0), 0.06 * dt)
       q = dq.times(q).normalized()
+    }
+    // Zoom spring （第十二轮）: evaluated analytically from the
+    // wall clock, so it runs on the same clock whether or not this
+    // frame is the one that started it, and lands exactly on 1.0
+    // when its lifetime ends.
+    if zoomSpring != nil {
+      if let z = springZoom(at: Date()) { currentZoom = max(0.02, z) }
+      else { zoomSpring = nil; currentZoom = 1 }
     }
     reportBusy()   // a spin expiring here is the settle the baker waits for
     layout(now: currentTime)
@@ -1154,6 +1219,9 @@ struct SphereSKView: UIViewRepresentable {
 struct MapView: View {
   @Environment(Store.self) var store
   @Environment(\.colorScheme) private var colorScheme
+  // Tab presence （第十二轮）: the SKView exists only while the map
+  // tab is selected (see sphere(in:)).
+  @Environment(\.selectedTab) private var selectedTab
   // Pre-rendering （第八轮；第十轮加避让）: when icons that were missing
   // at spec time land — or queued bakes complete — the baker bumps its
   // revision and the specs refresh (below). A refresh that would land
@@ -1325,10 +1393,24 @@ struct MapView: View {
   /// The sphere itself is the SpriteKit stage now （第九轮）: SwiftUI
   /// hands it the specs / focus / scheme and keeps the gestures — the
   /// scene owns orientation, spin, zoom and the per-frame layout.
+  ///
+  /// 第十二轮： the SKView is mounted only while this tab is
+  /// selected. A SpriteKit/Metal layer that stays in the hierarchy
+  /// while its page is deselected can hold its last presented frame
+  /// in the compositor for a beat after the switch — the other half
+  /// of the tab-switch ghost (TabEnter's cross-fade was the first).
+  /// Unmounting on deselect tears the layer down with the page;
+  /// re-entering presents the same scene object again (it lives in
+  /// this view's @State, so orientation / zoom / spin state survive
+  /// the round trip, and the bake caches make the first frame cheap).
   func sphere(in size: CGSize) -> some View {
-    SphereSKView(scene: scene, specs: bubbles, focus: focus, scheme: colorScheme,
-                 threadID: focusIdentity?.id, threadColor: focusIdentity.map { Color(hex: $0.color) } ?? .gray)
-      .frame(width: size.width, height: size.height)
+    ZStack {
+      if selectedTab == 2 {
+        SphereSKView(scene: scene, specs: bubbles, focus: focus, scheme: colorScheme,
+                     threadID: focusIdentity?.id, threadColor: focusIdentity.map { Color(hex: $0.color) } ?? .gray)
+      }
+    }
+    .frame(width: size.width, height: size.height)
   }
 
   // MARK: gestures
@@ -1395,7 +1477,12 @@ struct MapView: View {
     MagnificationGesture()
       .onChanged { s in
         if pinchBase == nil { scene.beginPinch(); pinchBase = scene.currentZoom }
-        scene.setZoom(min(2.4, max(0.55, (pinchBase ?? 1) * s)))
+        // No clamp here anymore （第十二轮）: shrinking is unlimited
+        // while the fingers are down — the scene's setZoom applies
+        // only stateless numeric guards — and what happens on
+        // release (spring home vs commit) is the scene's endPinch
+        // call, not a gesture-side stop.
+        scene.setZoom((pinchBase ?? 1) * s)
       }
       .onEnded { _ in
         pinchBase = nil
@@ -1468,7 +1555,23 @@ struct MapView: View {
       .animation(Motion.smooth, value: focus)
       Text("拖动旋转 · 捏合缩放 · 长按分段查看身份").font(.system(size: 11)).foregroundStyle(.secondary)
         .padding(.leading, 6)
+      // Current identity focus, spelled out （第十二轮）: picking an
+      // identity in the group sheet focuses the sphere on it, and
+      // this line — directly under the hint — says whose ball it is
+      // (the value itself, same rendering as the sheet's headlines).
+      // Group focus shows no line (the segment itself is visibly
+      // lit), and clearing the focus by tapping empty sphere removes
+      // it with the focus.
+      if let fi = focusIdentity {
+        HStack(spacing: 5) {
+          Circle().fill(Color(hex: fi.color)).frame(width: 6, height: 6)
+          Text(store.display(fi)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+        }
+        .padding(.leading, 6)
+        .transition(.opacity)
+      }
     }
+    .animation(Motion.smooth, value: focus)
   }
 
   /// A segment is still a focus toggle: tap it and the sphere keeps only that
@@ -1535,11 +1638,14 @@ func groupAddOptions(_ g: SphereGroup) -> [GroupAddOption] {
 }
 
 /// Second-level sheet behind a legend segment's long-press （第三轮细化）: the
-/// group's existing identity cards — label (value when unlabelled), value,
-/// bound-count badge, each in its own skin like the original app's map listed
-/// them down its left column. Tapping a card focuses the sphere on that
-/// identity (threads and all) and closes the sheet; the group's add entries
-/// stay in their own section below.
+/// group's existing identity cards — the identity's value as the headline
+/// （第十二轮： it used to be store.title, which for smart-imported cards
+/// is the placeholder label 「自动识别」 on every single row, the real
+/// address demoted to the small print）, the label / kind as the small
+/// print, bound-count badge, each in its own skin like the original
+/// app's map listed them down its left column. Tapping a card focuses
+/// the sphere on that identity (threads and all) and closes the sheet;
+/// the group's add entries stay in their own section below.
 struct GroupIdentitiesSheet: View {
   @Environment(Store.self) var store
   @Environment(\.dismiss) var dismiss
@@ -1582,8 +1688,12 @@ struct GroupIdentitiesSheet: View {
         .frame(width: 42, height: 42)
         .background(skinGradient(i.color), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
       VStack(alignment: .leading, spacing: 2) {
-        Text(store.title(i)).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-        Text(i.label.isEmpty ? i.kindName : i.value).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+        // Headline = the value itself （第十二轮）: the email address,
+        // the phone number, the login account — store.display, the
+        // same rendering the wallet card face uses (privacy masking
+        // included). Never the 「自动识别」 placeholder label.
+        Text(store.display(i)).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+        Text(rowSubtitle(i)).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
       }
       Spacer(minLength: 8)
       Text("\(store.accounts(of: i.id).count)")
@@ -1593,5 +1703,13 @@ struct GroupIdentitiesSheet: View {
         .foregroundStyle(Color(hex: i.color))
     }
     .contentShape(Rectangle())
+  }
+
+  /// Small print under the value headline: a real user-given label
+  /// rides along here; the smart-import placeholder 「自动识别」 is
+  /// not a label worth printing, so the kind name takes its place.
+  func rowSubtitle(_ i: Identity) -> String {
+    if !i.label.isEmpty && i.label != "自动识别" { return i.label }
+    return i.kindName
   }
 }
